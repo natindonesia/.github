@@ -42,6 +42,7 @@ inline image.
 | `post-comment` | `true` | |
 | `comment-marker` | `<!-- qa-evidence -->` | A re-run updates its own comment. |
 | `max-bytes` | `10485760` | Bigger files are skipped. |
+| `skip-note` | `""` | Why there is no report on purpose, when the caller skipped the agent. |
 | `dry-run` | `false` | Lists uploads and renders without uploading or commenting. |
 
 ## Outputs
@@ -65,7 +66,10 @@ inline image.
   captured, the step stops. A broken image where evidence should be reads as a
   failed capture, which is misleading.
 - **No report is a listing.** With captures but no report, a labelled file
-  listing is posted with an explicit note that it is uncontextualised.
+  listing is posted. It says the result is uncontextualised unless `skip-note`
+  explains that the agent was skipped deliberately — a run that captured nothing
+  it meant to capture and a run that was never asked to capture anything must
+  not read the same.
 - **Resolution order** for a link: exact path relative to the evidence
   directory, then `output/…`, then the file name alone if it is unambiguous.
   Absolute paths into the evidence directory are accepted.

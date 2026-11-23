@@ -65,6 +65,25 @@ jobs:
           grep -q 'after-detail.png' "$REPORT"                   # bare name resolved
           ! grep -q '](./' "$REPORT"                             # no local link left
 
+      - name: Publish again, this time saying why there is no report
+        id: skipped
+        uses: ./actions/publish-evidence
+        with:
+          pr-number: "1"
+          evidence-dir: fixtures/output
+          report: nowhere.md
+          skip-note: No product files changed, so no agent was run.
+          dry-run: "true"
+          post-comment: "false"
+
+      - name: Assert the skip note is rendered instead of the warning
+        env:
+          REPORT: ${{ steps.skipped.outputs.rendered-report }}
+        run: |
+          set -euo pipefail
+          grep -q 'No product files changed, so no agent was run.' "$REPORT"
+          ! grep -q 'uncontextualised' "$REPORT"
+
       - name: Assert a run that captured nothing is not a failure to publish
         id: empty
         uses: ./actions/publish-evidence

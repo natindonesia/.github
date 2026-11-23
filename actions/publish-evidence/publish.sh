@@ -182,14 +182,18 @@ if [ -n "$report_path" ]; then
     log "no URLs available; posting the report with its local links intact"
   fi
 elif [ -s "$mapping" ]; then
-  # No narrative from the agent. Pair the captures by name so before/after at
-  # least sit next to each other, and say plainly that there is no account of
-  # what they show.
+  # No narrative. Either the caller knows why (it skipped the agent on purpose),
+  # or nobody does -- and those two must not read the same, because one is a
+  # healthy run and the other is a run that proved nothing.
   {
     echo "### Evidence from the verification run"
     echo
-    echo "> No report was written, so this is a file listing, not a described"
-    echo "> result. Treat it as uncontextualised."
+    if [ -n "${SKIP_NOTE:-}" ]; then
+      printf '> %s\n' "$SKIP_NOTE"
+    else
+      echo "> No report was written, so this is a file listing, not a described"
+      echo "> result. Treat it as uncontextualised."
+    fi
     echo
     while IFS=$'\t' read -r rel url; do
       [ -n "$rel" ] || continue

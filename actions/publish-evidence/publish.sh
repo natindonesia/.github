@@ -19,6 +19,7 @@ ENDPOINT="${ENDPOINT:?ENDPOINT is required}"
 PUBLIC_BASE="${PUBLIC_BASE:?PUBLIC_BASE is required}"
 POST_COMMENT="${POST_COMMENT:-true}"
 COMMENT_MARKER="${COMMENT_MARKER:-<!-- qa-evidence -->}"
+HEAD_SHA="${HEAD_SHA:-}"
 DRY_RUN="${DRY_RUN:-false}"
 MAX_BYTES="${MAX_BYTES:-10485760}"
 
@@ -42,7 +43,56 @@ esac
 # captured nothing is unacceptable belongs to the verdict, which knows whether
 # an agent was supposed to run at all; failing here would also turn a run that
 # stopped before the agent started into a publish error and hide the reason.
+root_missing=false
 if [ ! -d "$root" ]; then
+  root_missing=true
+  log "no evidence directory at $root"
+else
+  # Absolute, normalised, so every later `-f` test is unambiguous.
+  root="$(cd "$root" && pwd)"
+fi
+
+# --- pick the report ---------------------------------------------------------
+
+if [ "$root_missing" = false ]; then
+  if [ -z "$REPORT" ]; then
+    for candidate in qa-report.md evidence.md report.md QA_REPORT.md; do
+      if [ -f "$root/$candidate" ]; then REPORT="$candidate"; break; fi
+    done
+  fi
+fi
+
+report_path=""
+if [ -n "$REPORT" ] && [ "$root_missing" = false ]; then
+  case "$REPORT" in
+    /*) report_path="$REPORT" ;;
+    *)  report_path="$root/$REPORT" ;;
+  esac
+  [ -f "$report_path" ] || report_path=""
+fi
+
+# --- recover a report that arrived as a review -------------------------------
+#
+# The QA agent posts its findings as a pull request review, not as a file, so a
+# complete run can leave the evidence directory empty and still hold a verdict.
+# The listing below would then be the only trace of it. The newest review bound
+# to the commit under test is the report.
+recovered_review=false
+if [ -z "$report_path" ] && [ -n "$HEAD_SHA" ] && [ -z "${SKIP_NOTE:-}" ]; then
+  review_body="${RUNNER_TEMP:-/tmp}/qa-review-body.md"
+  if gh api "repos/${REPO}/pulls/${PR}/reviews?per_page=100" \
+       --jq "[.[] | select(.commit_id == \"${HEAD_SHA}\" and ((.body // \"\") | length > 0))] | last | .body // \"\"" \
+       > "$review_body" 2>/dev/null \
+     && [ -n "$(tr -d '[:space:]' < "$review_body" 2>/dev/null || true)" ]; then
+    report_path="$review_body"
+    recovered_review=true
+    log "recovered the report from the agent's review on ${HEAD_SHA:0:12}"
+  else
+    log "no review bound to ${HEAD_SHA:0:12}; falling back to the file listing"
+  fi
+fi
+
+if [ "$root_missing" = true ] && [ -z "$report_path" ]; then
   warning "no evidence directory at $root, so nothing could be published"
   summary "### Evidence"
   summary ""
@@ -51,38 +101,20 @@ if [ ! -d "$root" ]; then
   exit 0
 fi
 
-# Absolute, normalised, so every later `-f` test is unambiguous.
-root="$(cd "$root" && pwd)"
-
 files=()
-while IFS= read -r -d '' file; do
-  files+=("$file")
-done < <(find "$root" -type f -not -name '.*' -size -"${MAX_BYTES}"c -print0 | sort -z)
+if [ "$root_missing" = false ]; then
+  while IFS= read -r -d '' file; do
+    files+=("$file")
+  done < <(find "$root" -type f -not -name '.*' -size -"${MAX_BYTES}"c -print0 | sort -z)
+fi
 
-if [ ${#files[@]} -eq 0 ]; then
+if [ ${#files[@]} -eq 0 ] && [ -z "$report_path" ]; then
   log "No evidence files in $root."
   summary "### Evidence"
   summary ""
   summary "The run produced no files in \`$EVIDENCE_DIR\`, so nothing is shown here."
   echo "uploaded=0" >> "${GITHUB_OUTPUT:-/dev/null}"
   exit 0
-fi
-
-# --- pick the report ---------------------------------------------------------
-
-if [ -z "$REPORT" ]; then
-  for candidate in qa-report.md evidence.md report.md QA_REPORT.md; do
-    if [ -f "$root/$candidate" ]; then REPORT="$candidate"; break; fi
-  done
-fi
-
-report_path=""
-if [ -n "$REPORT" ]; then
-  case "$REPORT" in
-    /*) report_path="$REPORT" ;;
-    *)  report_path="$root/$REPORT" ;;
-  esac
-  [ -f "$report_path" ] || report_path=""
 fi
 
 # --- upload ------------------------------------------------------------------
@@ -172,8 +204,21 @@ is_capture() {
 
 if [ -n "$report_path" ]; then
   if [ -s "$mapping" ]; then
-    REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
-      python3 "$(dirname "$0")/render.py"
+    if [ "$recovered_review" = true ]; then
+      # A review may quote files this run never captured, because the review is
+      # prose about the change rather than a manifest of this run's captures.
+      # Being wrong about a link there is not a reason to publish nothing -- but
+      # a *written* report that points at a capture it did not produce is a hole
+      # in the evidence, and must still fail.
+      if ! REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
+        python3 "$(dirname "$0")/render.py"; then
+        cp "$report_path" "$rendered"
+        log "could not repoint every link; posting the recovered review as written"
+      fi
+    else
+      REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
+        python3 "$(dirname "$0")/render.py"
+    fi
   else
     # Nothing was uploaded, so there is no URL to point at. Post the report as
     # written: its links will not render, but the verdict is still readable,
@@ -203,6 +248,11 @@ elif [ -s "$mapping" ]; then
       echo
     done < "$mapping"
   } > "$rendered"
+fi
+
+if [ "$recovered_review" = true ] && [ -s "$rendered" ]; then
+  { echo "> Recovered from the agent's review on \`${HEAD_SHA:0:12}\`; the run wrote no separate report."; echo; cat "$rendered"; } > "${rendered}.review"
+  mv "${rendered}.review" "$rendered"
 fi
 
 # --- deliver -----------------------------------------------------------------

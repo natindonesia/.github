@@ -204,12 +204,20 @@ is_capture() {
 
 if [ -n "$report_path" ]; then
   if [ -s "$mapping" ]; then
-    if ! REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
-      python3 "$(dirname "$0")/render.py"; then
-      # A recovered review may quote files this run never captured. Being
-      # wrong about a link is not a reason to publish nothing.
-      cp "$report_path" "$rendered"
-      log "could not repoint every link; posting the report as written"
+    if [ "$recovered_review" = true ]; then
+      # A review may quote files this run never captured, because the review is
+      # prose about the change rather than a manifest of this run's captures.
+      # Being wrong about a link there is not a reason to publish nothing -- but
+      # a *written* report that points at a capture it did not produce is a hole
+      # in the evidence, and must still fail.
+      if ! REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
+        python3 "$(dirname "$0")/render.py"; then
+        cp "$report_path" "$rendered"
+        log "could not repoint every link; posting the recovered review as written"
+      fi
+    else
+      REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
+        python3 "$(dirname "$0")/render.py"
     fi
   else
     # Nothing was uploaded, so there is no URL to point at. Post the report as

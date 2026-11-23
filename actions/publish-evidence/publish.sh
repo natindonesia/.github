@@ -37,7 +37,19 @@ case "$EVIDENCE_DIR" in
   /*) root="$EVIDENCE_DIR" ;;
   *)  root="${GITHUB_WORKSPACE:-$PWD}/$EVIDENCE_DIR" ;;
 esac
-[ -d "$root" ] || fail "no evidence directory at $root"
+
+# A missing directory is not this step's failure. Deciding that a run which
+# captured nothing is unacceptable belongs to the verdict, which knows whether
+# an agent was supposed to run at all; failing here would also turn a run that
+# stopped before the agent started into a publish error and hide the reason.
+if [ ! -d "$root" ]; then
+  warning "no evidence directory at $root, so nothing could be published"
+  summary "### Evidence"
+  summary ""
+  summary "The run left no \`$EVIDENCE_DIR\` directory, so there was nothing to collect."
+  echo "uploaded=0" >> "${GITHUB_OUTPUT:-/dev/null}"
+  exit 0
+fi
 
 # Absolute, normalised, so every later `-f` test is unambiguous.
 root="$(cd "$root" && pwd)"

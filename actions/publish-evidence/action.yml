@@ -1,0 +1,107 @@
+name: publish-evidence
+description: Upload a QA run's captures, repoint the report's local links at them, and post the result where a reviewer will see it.
+author: natindonesia
+
+# The agent writes a report with ordinary relative image links and captures
+# files next to it. This turns that into a comment a reviewer can read without
+# downloading a zip, and keeps the storage detail out of the prompt.
+#
+# The bucket is public because that is the only thing GitHub's image proxy will
+# fetch: a raw branch URL is not readable by it without credentials, and a
+# release asset needs a session cookie. Credentials are scoped to that one
+# bucket. Point them at the org secrets QA_EVIDENCE_B2_*.
+#
+#   - uses: natindonesia/.github/actions/publish-evidence@v1
+#     if: always()
+#     with:
+#       pr-number: ${{ github.event.pull_request.number }}
+#       report: qa-report.md
+#     env:
+#       AWS_ACCESS_KEY_ID: ${{ secrets.QA_EVIDENCE_B2_KEY_ID }}
+#       AWS_SECRET_ACCESS_KEY: ${{ secrets.QA_EVIDENCE_B2_APPLICATION_KEY }}
+#
+# A run without credentials does not fail: it warns and leaves the captures in
+# whatever artifact the caller uploads.
+
+inputs:
+  pr-number:
+    description: Pull request to comment on.
+    required: true
+  evidence-dir:
+    description: Directory holding the captures, absolute or relative to the workspace.
+    required: false
+    default: output
+  report:
+    description: |
+      Report file inside the evidence directory. Relative links in it are
+      repointed. Leave empty to auto-detect qa-report.md, evidence.md, report.md,
+      QA_REPORT.md. With no report at all, a labelled file listing is posted
+      instead, and the caller is told so.
+    required: false
+    default: ""
+  bucket:
+    description: Object storage bucket, already public.
+    required: false
+    default: natindonesia-qa-screenshots
+  endpoint:
+    description: S3-compatible endpoint of the bucket.
+    required: false
+    default: https://s3.us-east-005.backblazeb2.com
+  public-base:
+    description: Prefix that serves the bucket contents over plain HTTPS.
+    required: false
+    default: https://f005.backblazeb2.com/file/natindonesia-qa-screenshots
+  prefix:
+    description: |
+      Key prefix. Defaults to repo/<owner/repo>/pr-<number>/<run id>, which keeps
+      repositories and pull requests from colliding inside one bucket.
+    required: false
+    default: ""
+  post-comment:
+    description: Post the rendered report as a pull request comment.
+    required: false
+    default: "true"
+  comment-marker:
+    description: |
+      Hidden marker that identifies this action's comment. A re-run updates its
+      own comment instead of stacking another one on the pull request.
+    required: false
+    default: "<!-- qa-evidence -->"
+  max-bytes:
+    description: Skip files larger than this; a multi-hundred-megabyte video is not evidence.
+    required: false
+    default: "10485760"
+  dry-run:
+    description: List what would be uploaded and write the rendered report, without touching storage or the pull request.
+    required: false
+    default: "false"
+
+outputs:
+  rendered-report:
+    description: Path to the markdown with public URLs. Feed this to qa-verdict.
+    value: ${{ steps.publish.outputs.rendered-report }}
+  uploaded:
+    description: Number of files uploaded.
+    value: ${{ steps.publish.outputs.uploaded }}
+  prefix:
+    description: Key prefix used, useful for linking the object listing.
+    value: ${{ steps.publish.outputs.prefix }}
+
+runs:
+  using: composite
+  steps:
+    - id: publish
+      shell: bash
+      env:
+        EVIDENCE_DIR: ${{ inputs.evidence-dir }}
+        REPORT: ${{ inputs.report }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        BUCKET: ${{ inputs.bucket }}
+        ENDPOINT: ${{ inputs.endpoint }}
+        PUBLIC_BASE: ${{ inputs.public-base }}
+        PREFIX: ${{ inputs.prefix }}
+        POST_COMMENT: ${{ inputs.post-comment }}
+        COMMENT_MARKER: ${{ inputs.comment-marker }}
+        MAX_BYTES: ${{ inputs.max-bytes }}
+        DRY_RUN: ${{ inputs.dry-run }}
+      run: bash "${{ github.action_path }}/publish.sh"

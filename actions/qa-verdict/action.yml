@@ -1,0 +1,75 @@
+name: qa-verdict
+description: Score a QA report and publish the assurance/verified check run, failing closed when there is no report.
+author: natindonesia
+
+# Shared so that two repositories publishing evidence the same way also score it
+# the same way. Reads the rendered report first (the document a reviewer sees),
+# then a review bound to this commit, then nothing -- and nothing is not a pass.
+#
+#   - uses: natindonesia/.github/actions/qa-verdict@v1
+#     if: always()
+#     env:
+#       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+#     with:
+#       pr-number: ${{ github.event.pull_request.number }}
+#       report-path: ${{ steps.evidence.outputs.rendered-report }}
+#       head-sha: ${{ github.event.pull_request.head.sha }}
+
+inputs:
+  pr-number:
+    description: Pull request whose reviews are the fallback source.
+    required: true
+  head-sha:
+    description: Commit the verdict is bound to.
+    required: true
+  check-name:
+    description: Name of the check run to publish.
+    required: false
+    default: assurance/verified
+  report-path:
+    description: Rendered report from publish-evidence. Read first, so a run that stopped early still publishes what it learned.
+    required: false
+    default: ""
+  not-applicable:
+    description: |
+      True when the change cannot alter the product. Publishes a successful
+      "not-applicable" verdict instead of demanding an agent's opinion.
+    required: false
+    default: "false"
+  not-applicable-text:
+    description: Explanation used with not-applicable when no report exists.
+    required: false
+    default: ""
+  no-report-hint:
+    description: Appended to the "no report" summary, usually what to fix in the environment.
+    required: false
+    default: ""
+  fail-on-no-report:
+    description: Fail the job when no report was produced. Off only for repositories where the QA job is advisory.
+    required: false
+    default: "true"
+  run-url:
+    description: Link to the run, appended to the check summary.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        REPORT_PATH: ${{ inputs.report-path }}
+        CHECK_NAME: ${{ inputs.check-name }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        PR_NUMBER: ${{ inputs.pr-number }}
+        NOT_APPLICABLE: ${{ inputs.not-applicable }}
+        NOT_APPLICABLE_TEXT: ${{ inputs.not-applicable-text }}
+        NO_REPORT_HINT: ${{ inputs.no-report-hint }}
+        FAIL_ON_NO_REPORT: ${{ inputs.fail-on-no-report }}
+        RUN_URL: ${{ inputs.run-url }}
+        RUN_URL_DEFAULT: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+        # An explicit input wins; otherwise point at this run.
+        if [ -z "${RUN_URL}" ]; then export RUN_URL="${RUN_URL_DEFAULT}"; fi
+        python3 "${{ github.action_path }}/verdict.py"

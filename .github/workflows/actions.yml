@@ -65,6 +65,20 @@ jobs:
           grep -q 'after-detail.png' "$REPORT"                   # bare name resolved
           ! grep -q '](./' "$REPORT"                             # no local link left
 
+      - name: Assert a run that captured nothing is not a failure to publish
+        id: empty
+        uses: ./actions/publish-evidence
+        with:
+          pr-number: "1"
+          evidence-dir: nowhere
+          dry-run: "true"
+          post-comment: "false"
+
+      - name: Assert it reported zero files and exited clean
+        run: |
+          set -euo pipefail
+          test "${{ steps.empty.outputs.uploaded }}" = "0"
+
       - name: Assert a report that points at a missing capture fails
         run: |
           set -euo pipefail

@@ -55,8 +55,12 @@ inline image.
 ## Behaviour worth knowing
 
 - **No credentials is not a failure.** The step warns and exits 0, so a
-  repository without the bucket secrets still passes; its captures stay in
-  whatever artifact the caller uploads.
+  repository without the bucket secrets still passes; the report is posted with
+  its local links intact and the captures stay in whatever artifact the caller
+  uploads.
+- **No capture directory is not a failure either.** Whether a run that captured
+  nothing is acceptable is the verdict's call, and this step failing first would
+  hide the reason the agent never ran.
 - **A broken link fails.** If the report references a file that was not
   captured, the step stops. A broken image where evidence should be reads as a
   failed capture, which is misleading.

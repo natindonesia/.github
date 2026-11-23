@@ -1,0 +1,112 @@
+name: actions
+
+# The shared actions are consumed by repositories that cannot see a mistake here
+# until their own CI goes red, so they get a self-test of their own. Everything
+# runs against a scratch directory in dry-run mode: no bucket, no pull request.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    name: publish-evidence + qa-verdict
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build a fixture that looks like an agent's output
+        run: |
+          set -euo pipefail
+          mkdir -p fixtures/output/shots
+          # One pixel PNGs: the action only cares about names and content types.
+          printf '\x89PNG\r\n\x1a\n' > fixtures/output/before-home.png
+          printf '\x89PNG\r\n\x1a\n' > fixtures/output/after-home.png
+          printf '\x89PNG\r\n\x1a\n' > fixtures/output/shots/after-detail.png
+          cat > fixtures/output/qa-report.md <<'MD'
+          ## QA Report: PASS WITH ISSUES
+
+          | state | capture |
+          |---|---|
+          | before | ![before](./before-home.png) |
+          | after | ![after](./after-home.png "home screen") |
+
+          Also in HTML and by bare name: <img src="../output/after-home.png">
+          and ![detail](after-detail.png).
+
+          An external link must survive untouched: ![gh](https://example.com/x.png).
+          MD
+
+      - name: Publish with the action
+        id: evidence
+        uses: ./actions/publish-evidence
+        with:
+          pr-number: "1"
+          evidence-dir: fixtures/output
+          report: qa-report.md
+          dry-run: "true"
+          post-comment: "false"
+
+      - name: Assert the links were repointed
+        env:
+          REPORT: ${{ steps.evidence.outputs.rendered-report }}
+        run: |
+          set -euo pipefail
+          echo "uploaded=${{ steps.evidence.outputs.uploaded }}, report=${REPORT}"
+          grep -q 'https://f005.backblazeb2.com/file/natindonesia-qa-screenshots/repo/' "$REPORT"
+          grep -q 'after-home.png "home screen"' "$REPORT"      # title preserved
+          grep -q 'https://example.com/x.png' "$REPORT"          # external untouched
+          grep -q 'after-detail.png' "$REPORT"                   # bare name resolved
+          ! grep -q '](./' "$REPORT"                             # no local link left
+
+      - name: Assert a report that points at a missing capture fails
+        run: |
+          set -euo pipefail
+          printf '\n![gone](./missing.png)\n' >> fixtures/output/qa-report.md
+          if GITHUB_WORKSPACE="$PWD/fixtures" GITHUB_REPOSITORY=natindonesia/selftest \
+               PR_NUMBER=1 GITHUB_RUN_ID=1 BUCKET=b ENDPOINT=e PUBLIC_BASE=https://example.com \
+               AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x DRY_RUN=true POST_COMMENT=false \
+               bash actions/publish-evidence/publish.sh > /dev/null 2>&1; then
+            echo "::error::a report with a broken link was published instead of rejected"
+            exit 1
+          fi
+
+      - name: Score the report with the action
+        uses: ./actions/qa-verdict
+        with:
+          pr-number: "1"
+          head-sha: ${{ github.sha }}
+          report-path: ${{ steps.evidence.outputs.rendered-report }}
+          run-url: https://example.com/run
+        env:
+          DRY_RUN: "true"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assert every verdict branch
+        run: |
+          set -euo pipefail
+          expect() {
+            local want="$1" body="$2" not_applicable="${3:-false}"
+            printf '%s' "$body" > /tmp/report.md
+            local got
+            got="$(REPORT_PATH=/tmp/report.md HEAD_SHA=abc GITHUB_REPOSITORY=natindonesia/selftest \
+                   PR_NUMBER=1 DRY_RUN=true NOT_APPLICABLE="$not_applicable" FAIL_ON_NO_REPORT=false \
+                   python3 actions/qa-verdict/verdict.py | sed 's/.*qa: \([a-z-]*\).*/\1/')"
+            if [ "$got" != "$want" ]; then
+              echo "::error::expected verdict '$want' for '${body:0:40}', got '$got'"
+              exit 1
+            fi
+          }
+
+          expect pass        '## QA Report: PASS'
+          expect pass-with-issues '## QA Report: PASS WITH ISSUES'
+          expect fail        '## QA Report: FAIL'
+          expect partial     '## QA Report: PARTIAL'
+          expect no-report   '' false
+          expect not-applicable '' true

@@ -10,12 +10,16 @@ one repository in `natindonesia` runs.
 | [`publish-evidence`](actions/publish-evidence) | Upload a QA run's captures, repoint the report's local image links at them, and post the result as a pull request comment. |
 | [`qa-verdict`](actions/qa-verdict) | Score that report and publish the `assurance/verified` check run, failing closed when there is no report. |
 
-Both are composite actions and are versioned by tag. Pin the major version and
-bump it deliberately:
+Both are composite actions and are versioned by tag:
 
 ```yaml
 - uses: natindonesia/.github/actions/publish-evidence@v1
 ```
+
+`v1` moves: a fix to a shared action has to reach its consumers, so the major
+tag is force-updated and `v1.0`, `v1.1` … are the immutable points. A workflow
+whose result must be reproducible byte for byte should pin one of those, or the
+commit itself.
 
 They exist because two repositories had the same ~150 lines of shell copied into
 their `verify.yml`: install the AWS CLI, upload to the evidence bucket, rewrite

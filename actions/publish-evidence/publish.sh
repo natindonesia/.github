@@ -285,6 +285,44 @@ if [ "$POST_COMMENT" = "true" ] && [ "$DRY_RUN" != "true" ]; then
   fi
 fi
 
+# --- show what the report did not --------------------------------------------
+#
+# The agent posts its findings as prose, and prose about a before/after change
+# usually ends up without a single image even when the captures exist. An
+# evidence comment with no images is a claim, not a look. Anything the run
+# captured and the report did not cite is appended, collapsed, and labelled as
+# uncited -- so the reviewer sees it without it being passed off as the report.
+
+if [ -s "$mapping" ] && [ -s "$rendered" ] && ! grep -q '!\[' "$rendered"; then
+  uncited=()
+  while IFS=$'\t' read -r rel url; do
+    [ -n "$rel" ] || continue
+    [ "$rel" = "${REPORT:-}" ] && continue
+    is_capture "$rel" && uncited+=("$rel" "$url")
+  done < "$mapping"
+
+  if [ ${#uncited[@]} -gt 0 ]; then
+    {
+      echo
+      echo "<details><summary>Captures from this run, not cited by the report</summary>"
+      echo
+      echo "> The report does not embed these, so they are not an argument about"
+      echo "> the change. They are what the run photographed."
+      echo
+      echo "| capture | |"
+      echo "|---|---|"
+      i=0
+      while [ "$i" -lt ${#uncited[@]} ]; do
+        echo "| \`${uncited[$i]}\` | ![${uncited[$i]}](${uncited[$((i + 1))]}) |"
+        i=$((i + 2))
+      done
+      echo
+      echo "</details>"
+    } >> "$rendered"
+    log "appended $(( ${#uncited[@]} / 2 )) uncited capture(s) as a collapsed gallery"
+  fi
+fi
+
 summary "### Evidence"
 summary ""
 summary "${uploaded} file(s) uploaded to \`${BUCKET}/${PREFIX}\`."

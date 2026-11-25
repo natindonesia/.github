@@ -255,36 +255,6 @@ if [ "$recovered_review" = true ] && [ -s "$rendered" ]; then
   mv "${rendered}.review" "$rendered"
 fi
 
-# --- deliver -----------------------------------------------------------------
-
-if [ "$POST_COMMENT" = "true" ] && [ "$DRY_RUN" != "true" ]; then
-  export GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
-  if [ -z "$GH_TOKEN" ]; then
-    warning "no token, so the rendered evidence was not posted"
-  else
-    # One comment per marker: a re-run updates its own evidence instead of
-    # stacking a second copy on the pull request.
-    existing="$(gh api "repos/${REPO}/issues/${PR}/comments?per_page=100" \
-      --jq "[.[] | select(.body | contains(\"${COMMENT_MARKER}\"))] | last | .id // \"\"" 2>/dev/null || true)"
-    {
-      printf '%s\n' "$COMMENT_MARKER"
-      cat "$rendered"
-    } > /tmp/qa-evidence-comment.md
-
-    if [ -n "$existing" ]; then
-      gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" \
-        -F body=@/tmp/qa-evidence-comment.md >/dev/null
-      log "updated comment ${existing}"
-      summary "Updated the evidence comment on #${PR}."
-    else
-      gh api -X POST "repos/${REPO}/issues/${PR}/comments" \
-        -F body=@/tmp/qa-evidence-comment.md >/dev/null
-      log "posted a new evidence comment"
-      summary "Posted the evidence on #${PR}."
-    fi
-  fi
-fi
-
 # --- show what the report did not --------------------------------------------
 #
 # The agent posts its findings as prose, and prose about a before/after change
@@ -320,6 +290,36 @@ if [ -s "$mapping" ] && [ -s "$rendered" ] && ! grep -q '!\[' "$rendered"; then
       echo "</details>"
     } >> "$rendered"
     log "appended $(( ${#uncited[@]} / 2 )) uncited capture(s) as a collapsed gallery"
+  fi
+fi
+
+# --- deliver -----------------------------------------------------------------
+
+if [ "$POST_COMMENT" = "true" ] && [ "$DRY_RUN" != "true" ]; then
+  export GH_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  if [ -z "$GH_TOKEN" ]; then
+    warning "no token, so the rendered evidence was not posted"
+  else
+    # One comment per marker: a re-run updates its own evidence instead of
+    # stacking a second copy on the pull request.
+    existing="$(gh api "repos/${REPO}/issues/${PR}/comments?per_page=100" \
+      --jq "[.[] | select(.body | contains(\"${COMMENT_MARKER}\"))] | last | .id // \"\"" 2>/dev/null || true)"
+    {
+      printf '%s\n' "$COMMENT_MARKER"
+      cat "$rendered"
+    } > /tmp/qa-evidence-comment.md
+
+    if [ -n "$existing" ]; then
+      gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" \
+        -F body=@/tmp/qa-evidence-comment.md >/dev/null
+      log "updated comment ${existing}"
+      summary "Updated the evidence comment on #${PR}."
+    else
+      gh api -X POST "repos/${REPO}/issues/${PR}/comments" \
+        -F body=@/tmp/qa-evidence-comment.md >/dev/null
+      log "posted a new evidence comment"
+      summary "Posted the evidence on #${PR}."
+    fi
   fi
 fi
 

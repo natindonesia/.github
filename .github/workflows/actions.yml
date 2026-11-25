@@ -143,3 +143,26 @@ jobs:
           expect partial     '## QA Report: PARTIAL'
           expect no-report   '' false
           expect not-applicable '' true
+
+      - name: Assert a report that embeds nothing still shows the captures
+        run: |
+          set -euo pipefail
+          rm -rf fixtures/plain /tmp/gallery.out && mkdir -p fixtures/plain/output
+          printf '\x89PNG\r\n\x1a\n' > fixtures/plain/output/before-home.png
+          printf '\x89PNG\r\n\x1a\n' > fixtures/plain/output/after-home.png
+          printf '## QA Report: PASS\n\nProse only.\n' > fixtures/plain/output/qa-report.md
+
+          GITHUB_WORKSPACE="$PWD/fixtures/plain" GITHUB_REPOSITORY=natindonesia/selftest \
+            PR_NUMBER=1 GITHUB_RUN_ID=1 BUCKET=b ENDPOINT=e PUBLIC_BASE=https://example.com \
+            AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x DRY_RUN=true POST_COMMENT=false \
+            GITHUB_OUTPUT=/tmp/gallery.out EVIDENCE_DIR=output REPORT=qa-report.md \
+            bash actions/publish-evidence/publish.sh > /dev/null 2>&1
+
+          rendered="$(sed -n 's/^rendered-report=//p' /tmp/gallery.out)"
+
+          # A report with no images, and captures on disk, must still show them:
+          # a comment full of measurements and no images is a claim, not a look.
+          grep -q 'Captures from this run, not cited' "$rendered" \
+            || { echo "::error::a report with no images published no gallery"; exit 1; }
+          grep -q '!\[after-home.png\]' "$rendered" \
+            || { echo "::error::the gallery did not embed the capture"; exit 1; }

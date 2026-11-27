@@ -256,6 +256,75 @@ jobs:
           grep -q '### Observations' actions/qa-agent/report.template.md
           grep -q '### Judgement' actions/qa-agent/report.template.md
 
+  harness:
+    name: qa-harness
+    # The pipeline dry run below calls this action at `@v1`, which proves the
+    # released combination. This job runs the branch's own harness against the
+    # same fixture, so a change to it is tested before it is released rather
+    # than after. It is also where the two failures that only a real start can
+    # find are pinned: a compose command that lost its shell variable to compose
+    # interpolation, and a seed service that ran after the product started.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert what counts as the product answering
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import sys
+
+          sys.path.insert(0, "actions/qa-harness")
+          import harness
+
+          assert harness.answered(200) and harness.answered(302)
+          assert harness.answered(401) and harness.answered(403)
+          # A product that is one site per hostname -- Frappe, anything
+          # multi-tenant -- answers 404 for a hostname it does not serve. That is
+          # the site-not-found page, not the product being up, and calling it up
+          # hands the agent an error page to review.
+          assert not harness.answered(404)
+          assert not harness.answered(500) and not harness.answered(503)
+          print("answered(): ok")
+          PY
+
+      - name: Start the fixture the way a repository is started
+        env:
+          BASE_SHA: fixture
+          HEAD_SHA: fixture
+        run: |
+          set -euo pipefail
+          python3 actions/qa-harness/harness.py up \
+            --compose fixtures/app/compose.verify.yaml \
+            --after-image nginx:alpine \
+            --before-image nginx:alpine \
+            --mode compare \
+            --project qa-selftest-harness \
+            --urls '{"after":"http://127.0.0.1:8200","before":"http://127.0.0.1:8100"}' \
+            --evidence-dir "$RUNNER_TEMP/evidence" \
+            --dry-run
+
+      - name: Assert the seed ran once, before anything served
+        run: |
+          set -euo pipefail
+          # The healthcheck already requires the file to read exactly `seeded`,
+          # so a second run of the seed or a later one would have failed the
+          # start. This checks it from where the agent stands.
+          test "$(curl -fsS http://127.0.0.1:8200/site/seeded.txt)" = seeded
+          test "$(curl -fsS http://127.0.0.1:8100/site/seeded.txt)" = seeded
+          python3 -c "import json,os; d=json.load(open(os.environ['RUNNER_TEMP']+'/evidence/input/environment.json')); assert d['mode']=='compare', d; print('environment.json:', d['probes'])"
+
+      - name: Stop the fixture
+        if: always()
+        run: |
+          set -euo pipefail
+          python3 actions/qa-harness/harness.py down \
+            --compose fixtures/app/compose.verify.yaml \
+            --project qa-selftest-harness \
+            --log "$RUNNER_TEMP/product.log"
+
   pipeline:
     name: qa-verify dry run
     # Exercises the reusable workflow end to end -- contract, compose, probe,

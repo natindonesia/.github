@@ -51,7 +51,7 @@ answer, who can sign in, and how to start them.
 | Toolchain and build (Flutter, Go, Node, Frappe) in the repo's own build workflow | ✔ | | |
 | Publish the image built from the change, and pass its ref in | ✔ | | |
 | Name the baseline image in `qa.yml`, as `{base_sha}` | ✔ | | |
-| `compose.verify.yaml`: services, dependencies, healthchecks, a `seed` service | ✔ | | |
+| `compose.verify.yaml`: services, dependencies, healthchecks, a `seed` service in the `seed` profile | ✔ | | |
 | Declare `urls` and `accounts`, plus an optional `focus:` | ✔ | | |
 | Budget, iterations and timeout, capped by Common | ✔ | | |
 | `concurrency`, base and head checkouts | | | ✔ |
@@ -61,7 +61,7 @@ answer, who can sign in, and how to start them.
 | Refuse a "change" whose image is identical to its baseline | | | ✔ |
 | Log in, pull both images | | | ✔ |
 | Degrade to single mode when there is no baseline to compare against | | | ✔ |
-| `docker compose up --wait`, run the `seed` service | | | ✔ |
+| Run `seed` to completion, then `docker compose up --wait` | | | ✔ |
 | Probe the declared URLs before the agent starts | | | ✔ |
 | Python, uv, Playwright, ffmpeg, gh | | | ✔ |
 | Write the note that says what the agent is being given | | | ✔ |
@@ -162,15 +162,35 @@ services:
     healthcheck: {test: ["CMD", "pg_isready"], interval: 2s, retries: 30}
   seed:
     image: ${AFTER_IMAGE:?set by the pipeline}
+    # Its own profile, so `up` never starts it: the pipeline runs it first.
+    profiles: [seed]
     command: ["./seed.sh"]
     depends_on:
       db: {condition: service_healthy}
 ```
 
-The pipeline sets `AFTER_IMAGE`, `BEFORE_IMAGE`, `QA_MODE` and `QA_PROJECT`,
-enables the profiles for the chosen mode, runs `up --wait`, then runs `seed` once
-if that service exists, and finally waits until the declared URLs answer. Ports
-published here must match `urls` in `qa.yml`.
+The pipeline sets `AFTER_IMAGE`, `BEFORE_IMAGE`, `QA_MODE` and `QA_PROJECT`, runs
+the `seed` service to completion if there is one, enables the profiles for the
+chosen mode, runs `up --wait`, and finally waits until the declared URLs answer.
+Ports published here must match `urls` in `qa.yml`.
+
+Two things about this file that are easy to get wrong, both of them silent:
+
+- **Shell variables are `$$NAME`, not `$NAME`.** Compose interpolates `$NAME`
+  itself, from the host environment, before the container sees the command --
+  `--admin-password "$ADMIN_PASSWORD"` reaches the container as
+  `--admin-password ""` and the product either prompts for input that is not
+  coming or starts with an empty secret.
+- **Seeding runs before anything serves, not after.** A site created while a
+  server is already up is a site that server may not know about, and the first
+  request after seeding is exactly the one the agent makes.
+
+A `urls` entry may name a hostname rather than `127.0.0.1` -- `http://qa.localhost:8200`
+-- which is how a product that resolves one site per hostname (Frappe, anything
+multi-tenant) can be reached at all. The pipeline points the declared hostnames
+at `127.0.0.1` on the runner. It also refuses to call a URL "up" when it answers
+`404`: for those products that is the site-does-not-exist page, and handing it to
+the agent would turn an environment failure into a verdict about the change.
 
 ### Before and after
 

@@ -4,10 +4,19 @@
 #   * `before` is optional; without it the run is single-mode.
 #   * everything else -- databases, caches, a backend both revisions talk to --
 #     is the repository's business and carries no profile.
-#   * a `seed` service, if present, is run once after the stack is up.
+#   * a `seed` service, if present, lives in the `seed` profile and is run to
+#     completion before the stack starts, so nothing serves a half-built product.
 #
 # The pipeline sets AFTER_IMAGE, BEFORE_IMAGE, QA_MODE and QA_PROJECT, and
 # enables the profiles. Ports published here must match `urls` in qa.yml.
+# Shell variables in a command are written `$$NAME`: compose interpolates `$NAME`
+# itself, from the host, before the container ever sees it.
+#
+# This file is also the self-test. `seed` appends one line to a volume the two
+# revisions serve, and each revision's healthcheck requires the file to read
+# exactly `seeded`. That makes the dry run fail if the seed never ran, if it ran
+# after the product started, or if `up` started it a second time -- the three
+# ways this contract is easy to get wrong, and silent when it is.
 
 services:
   after:
@@ -15,8 +24,10 @@ services:
     profiles: [after]
     ports:
       - "8200:80"
+    volumes:
+      - site:/usr/share/nginx/html/site
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      test: ["CMD", "sh", "-c", "test \"$$(wget -qO- http://127.0.0.1/site/seeded.txt)\" = seeded"]
       interval: 2s
       timeout: 2s
       retries: 30
@@ -26,8 +37,20 @@ services:
     profiles: [before]
     ports:
       - "8100:80"
+    volumes:
+      - site:/usr/share/nginx/html/site
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      test: ["CMD", "sh", "-c", "test \"$$(wget -qO- http://127.0.0.1/site/seeded.txt)\" = seeded"]
       interval: 2s
       timeout: 2s
       retries: 30
+
+  seed:
+    image: alpine:3
+    profiles: [seed]
+    volumes:
+      - site:/site
+    command: ["sh", "-c", "printf 'seeded\\n' >> /site/seeded.txt"]
+
+volumes:
+  site:

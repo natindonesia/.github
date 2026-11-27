@@ -31,10 +31,12 @@ import argparse
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -50,6 +52,45 @@ DEFAULTS: dict[str, Any] = {
 }
 
 REQUIRED_URIS = ("after",)
+
+
+def ensure_hosts(urls: dict[str, str]) -> None:
+    """Make a declared URL resolve, without asking the repository to explain why.
+
+    A product that is one site per hostname -- anything built on Frappe, and most
+    things with a tenant domain -- cannot be reached on `127.0.0.1` at all: the
+    request arrives for a site that does not exist. The repository declares the
+    URL it means, and this makes that URL reachable from the runner and from the
+    browser the agent drives.
+    """
+    unparsed = []
+    for url in urls.values():
+        host = urllib.parse.urlsplit(url).hostname or ""
+        if not host or host in ("127.0.0.1", "localhost"):
+            continue
+        try:
+            socket.gethostbyname(host)
+        except OSError:
+            unparsed.append(host)
+    if not unparsed:
+        return
+
+    entry = "127.0.0.1 " + " ".join(sorted(set(unparsed)))
+    for as_root in (False, True):
+        try:
+            if as_root:
+                subprocess.run(["sudo", "sh", "-c", f'echo "{entry}" >> /etc/hosts'], check=True)
+            else:
+                with open("/etc/hosts", "a", encoding="utf-8") as handle:
+                    handle.write(f"\n{entry}\n")
+            log(f"/etc/hosts: {entry}")
+            return
+        except (PermissionError, OSError, subprocess.CalledProcessError):
+            continue
+    warn(
+        f"could not point {', '.join(unparsed)} at 127.0.0.1; a URL declared by "
+        "hostname may not resolve for the agent"
+    )
 
 
 def log(message: str) -> None:
@@ -300,6 +341,17 @@ def compose(
     )
 
 
+def answered(status: int) -> bool:
+    """Whether a declared URL is serving the product, not refusing to.
+
+    A 404 at the root is how a product that is one site per hostname -- Frappe,
+    and most multi-tenant stacks -- says this hostname is not a site. Counting
+    that as "up" hands the agent a URL that answers every request with the same
+    error page, and the report then blames the change for it.
+    """
+    return status < 400 or status in (401, 403)
+
+
 def probe(url: str, timeout_seconds: int = 180) -> tuple[bool, str]:
     deadline = time.time() + timeout_seconds
     last = "no attempt made"
@@ -307,11 +359,11 @@ def probe(url: str, timeout_seconds: int = 180) -> tuple[bool, str]:
         try:
             request = urllib.request.Request(url, method="GET")
             with urllib.request.urlopen(request, timeout=10) as response:
-                if response.status < 500:
+                if answered(response.status):
                     return True, f"HTTP {response.status}"
                 last = f"HTTP {response.status}"
         except urllib.error.HTTPError as error:
-            if error.code < 500:
+            if answered(error.code):
                 return True, f"HTTP {error.code}"
             last = f"HTTP {error.code}"
         except Exception as error:  # noqa: BLE001 - any failure means "not answered yet"
@@ -325,6 +377,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     head_sha = os.getenv("HEAD_SHA", "")
     urls = json.loads(args.urls) if args.urls else {}
     mode = args.mode or "single"
+
+    ensure_hosts(urls)
 
     export("QA_MODE", mode)
     export("AFTER_IMAGE", args.after_image)
@@ -368,16 +422,21 @@ def cmd_up(args: argparse.Namespace) -> int:
                 fail(f"a dry run still needs its images to exist: {image}")
 
     profiles = ["after"] + (["before"] if mode == "compare" else [])
-    up = compose(args, ["up", "--detach", "--wait", "--wait-timeout", "600"], profiles)
-    if up.returncode != 0:
-        fail(f"docker compose could not start the product (exit {up.returncode})")
 
-    services = compose(args, ["config", "--services"], profiles, capture=True)
-    if services.returncode == 0 and "seed" in services.stdout.split():
-        log("running the seed service")
+    # One-shot preparation runs before anything serves. A site created after the
+    # server started is a site the server may not know about, and the first
+    # request after seeding is exactly the one the agent makes. The seed service
+    # lives in its own profile so `up` never starts it a second time.
+    declared = compose(args, ["config", "--profiles"], [], capture=True)
+    if declared.returncode == 0 and "seed" in declared.stdout.split():
+        log("running the seed service, before the product starts")
         seeded = compose(args, ["run", "--rm", "seed"], profiles)
         if seeded.returncode != 0:
             fail(f"the seed service failed (exit {seeded.returncode})")
+
+    up = compose(args, ["up", "--detach", "--wait", "--wait-timeout", "600"], profiles)
+    if up.returncode != 0:
+        fail(f"docker compose could not start the product (exit {up.returncode})")
 
     probed: dict[str, str] = {}
     for name in ("after", "before"):

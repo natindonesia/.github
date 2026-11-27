@@ -51,7 +51,7 @@ answer, who can sign in, and how to start them.
 | Toolchain and build (Flutter, Go, Node, Frappe) in the repo's own build workflow | ✔ | | |
 | Publish the image built from the change, and pass its ref in | ✔ | | |
 | Name the baseline image in `qa.yml`, as `{base_sha}` | ✔ | | |
-| `compose.verify.yaml`: services, dependencies, healthchecks, a `seed` service in the `seed` profile | ✔ | | |
+| `compose.verify.yaml`: services, dependencies, healthchecks; a `seed` service in the `seed` profile, or seeding inside the service when the schema only exists once it serves | ✔ | | |
 | `fixtures/qa`: the seed that decides what the agent signs in to | ✔ | | |
 | Declare `urls` and `accounts`, plus an optional `focus:` | ✔ | | |
 | Budget, iterations and timeout, capped by Common | ✔ | | |
@@ -189,6 +189,11 @@ Two things about this file that are easy to get wrong, both of them silent:
 - **Seeding runs before anything serves, not after.** A site created while a
   server is already up is a site that server may not know about, and the first
   request after seeding is exactly the one the agent makes.
+- **Unless the service creates its own schema.** A product that applies
+  migrations on startup has no table to seed until it is serving, so it cannot
+  use the `seed` step. It seeds from the checkout inside its own service instead,
+  and reports healthy only once the seeded account can actually sign in -- `up
+  --wait` then means "up *and* enterable", rather than "listening, probably".
 - **A database user that exists is not a database user that can log in.** Frappe's
   `bench new-site` grants the site's user to the host it connected from, which is
   the seed container's IP. That container exits, Docker hands its address to one

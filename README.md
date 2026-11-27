@@ -184,6 +184,13 @@ Two things about this file that are easy to get wrong, both of them silent:
 - **Seeding runs before anything serves, not after.** A site created while a
   server is already up is a site that server may not know about, and the first
   request after seeding is exactly the one the agent makes.
+- **A database user that exists is not a database user that can log in.** Frappe's
+  `bench new-site` grants the site's user to the host it connected from, which is
+  the seed container's IP. That container exits, Docker hands its address to one
+  of the containers that then serve the product, and the other revision answers
+  `1045 Access denied` -- different run, different victim. Pass
+  `--mariadb-user-host-login-scope='%'`, and have the seed check the grant rather
+  than assume it, because the stack looks healthy either way.
 
 A `urls` entry may name a hostname rather than `127.0.0.1` -- `http://qa.localhost:8200`
 -- which is how a product that resolves one site per hostname (Frappe, anything

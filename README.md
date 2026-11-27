@@ -73,7 +73,7 @@ answer, who can sign in, and how to start them.
 | Decide what a difference means: intended, or a regression | | ✔ | |
 | Choose the report's shape; embed any file type | | ✔ | |
 | State the verdict | | ✔ | |
-| Sweep stray evidence into the evidence directory | | | ✔ |
+| Put everything the report references in the evidence directory | | ✔ | |
 | Upload every file type, generate a still for each recording, repoint links | | | ✔ |
 | Comment on the pull request; keep an artifact fallback | | | ✔ |
 | Fall back to the agent's review when no report file was written | | | ✔ |
@@ -204,8 +204,15 @@ Everything else about the agent's work is its own judgement. These are not:
 
 ### The contract the agent writes against
 
-The agent never learns about object storage. It writes a report next to its
-captures, with ordinary relative links:
+The agent never learns about object storage, and Common never goes looking for
+it. One path is agreed before the run: `qa-report.md` in the evidence directory,
+started from the template the agent is handed
+([`report.template.md`](actions/qa-agent/report.template.md)). Whatever the agent
+captures lives beside it, and the pipeline uploads that directory. Anything left
+somewhere else is the agent's mistake and stays unpublished -- the run does not
+grow a search path that changes from run to run.
+
+The agent writes a report next to its captures, with ordinary relative links:
 
 ```markdown
 ## QA Report: PASS WITH ISSUES

@@ -242,6 +242,20 @@ jobs:
           set -euo pipefail
           docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
 
+      - name: Assert the report template is still the one the agent is handed
+        run: |
+          set -euo pipefail
+          # The template is shipped inside the action and copied next to the agent
+          # at run time. A rename would silently drop it from the prompt, and the
+          # agent would be told to start from a file that is not there.
+          grep -q 'report.template.md' actions/qa-agent/agent.py
+          for verdict in PASS 'PASS WITH ISSUES' FAIL PARTIAL; do
+            grep -q "$verdict" actions/qa-agent/report.template.md \
+              || { echo "::error::the template does not name the $verdict verdict"; exit 1; }
+          done
+          grep -q '### Observations' actions/qa-agent/report.template.md
+          grep -q '### Judgement' actions/qa-agent/report.template.md
+
   pipeline:
     name: qa-verify dry run
     # Exercises the reusable workflow end to end -- contract, compose, probe,

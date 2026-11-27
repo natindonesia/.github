@@ -23,7 +23,20 @@ Two rules are Common's, not the agent's:
    exercised is listed as unverified.
 
 The rest -- what to open, what to capture, how to compare the two revisions, what
-a difference means, and the shape of the report -- is the agent's call. The one
+a difference means, and the shape of the report -- is the agent's call.
+
+## One agreed path
+
+The agent is handed [`report.template.md`](report.template.md) and told to write
+`qa-report.md` in the evidence directory. It also owns the directory: anything
+the report references has to be there, with a relative name, because that is what
+gets uploaded. Common reads that one file and no other, and does not search the
+filesystem for what the agent forgot to move.
+
+The template is not enforced. What is enforced is the heading -- `## QA Report:
+PASS | PASS WITH ISSUES | FAIL | PARTIAL` -- because the check run reads it, and
+`publish-evidence` refuses a report whose links point at captures that were never
+uploaded. The one
 structural requirement is the verdict heading, `## QA Report: PASS | PASS WITH
 ISSUES | FAIL | PARTIAL`, because the check run reads it.
 

@@ -253,26 +253,6 @@ jobs:
         if: steps.scope.outputs.applies == 'true' && inputs.dry-run == false && env.QA_AGENT_KEY == ''
         run: echo "::notice title=No agent::OPENROUTER_API_KEY is not configured, so the product was started and probed but no agent judged it."
 
-      - name: Collect evidence the agent left elsewhere
-        if: always() && steps.scope.outputs.applies == 'true'
-        run: |
-          set -uo pipefail
-          mkdir -p "$QA_OUT"
-          for stray in "${RUNNER_WORKSPACE}/output" "$(dirname "$GITHUB_WORKSPACE")/output" "$QA_RUNTIME/output"; do
-            [ -d "$stray" ] || continue
-            [ "$(readlink -f "$stray")" = "$(readlink -f "$QA_OUT")" ] && continue
-            echo "collecting evidence from ${stray}"
-            find "$stray" -maxdepth 2 -type f \
-              \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' -o -name '*.webp' \
-              -o -name '*.mp4' -o -name '*.webm' -o -name '*.pdf' -o -name '*.json' -o -name '*.har' \
-              -o -name '*.md' -o -name '*.log' -o -name '*.txt' -o -name '*.zip' \) \
-              -print0 |
-              while IFS= read -r -d '' found; do
-                cp -n "$found" "$QA_OUT"/
-              done
-          done
-          ls -la "$QA_OUT" || true
-
       - name: Keep the evidence as an artifact too
         if: always() && steps.scope.outputs.applies == 'true'
         uses: actions/upload-artifact@v4
@@ -291,6 +271,11 @@ jobs:
         with:
           pr-number: ${{ github.event.pull_request.number }}
           evidence-dir: ${{ env.QA_OUT }}
+          # The agreed path. The action can guess, and the repositories that
+          # called it before this pipeline needed it to; here the shape is
+          # fixed by the template the agent was given, so guessing would only
+          # hide a run that wrote its report somewhere else.
+          report: qa-report.md
           head-sha: ${{ github.event.pull_request.head.sha }}
           dry-run: ${{ inputs.dry-run }}
         env:

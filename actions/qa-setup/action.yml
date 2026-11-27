@@ -45,15 +45,23 @@ runs:
         CACHE_HIT: ${{ steps.browser-cache.outputs.cache-hit }}
       run: |
         set -euo pipefail
-        # Into the runner's own Python, not a virtualenv: the agent calls it from
-        # a shell it starts itself, in a scratch directory, and has no reason to
-        # know how this was installed.
+        # The browsers are what this step is really installing, and they live in
+        # one cache keyed by version. The client installed here is only what
+        # downloads them; the agent installs the same version into its own
+        # virtualenv, because its browser tool runs in that interpreter.
         uv pip install --system "playwright==${PLAYWRIGHT_VERSION}"
         if [ "$CACHE_HIT" = "true" ]; then
           python -m playwright install-deps chromium
         else
           python -m playwright install --with-deps chromium
         fi
+
+        # The agent's own process runs in a virtualenv that cannot see the
+        # system packages, and its browser tool imports playwright there. One
+        # version, two interpreters: hand it over instead of pinning it twice,
+        # because the browsers are downloaded per version and a mismatch is a
+        # browser that cannot be launched.
+        echo "PLAYWRIGHT_VERSION=${PLAYWRIGHT_VERSION}" >> "$GITHUB_ENV"
 
     - name: Ensure ffmpeg and gh
       shell: bash

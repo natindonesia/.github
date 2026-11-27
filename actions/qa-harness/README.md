@@ -24,6 +24,14 @@ mode instead of failing: a missing baseline is a fact about the repository's
 build history, not a verdict about the change. The degradation is recorded in the
 step summary, in `environment.json`, and in the note the agent reads.
 
+`up` then starts the product in the order the contract implies: the `seed`
+service to completion if the compose file has one (it lives in the `seed`
+profile, so `up` itself cannot start it), then `up --wait`, then the declared
+URLs. Hostnames in `urls` are pointed at `127.0.0.1` on the runner, so a product
+that resolves one site per hostname can be declared by that name. An answer of
+`404` is not the product being up -- for those products it is the
+site-does-not-exist page, and an agent handed it would blame the change.
+
 ## Inputs and outputs
 
 `resolve` -> `product-paths`, `after-image`, `before-image`, `mode`, `urls`,

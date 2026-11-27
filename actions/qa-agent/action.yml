@@ -80,10 +80,14 @@ runs:
         status=0
         while :; do
           status=0
+          # `playwright` is here for the browser tool, which runs inside this
+          # process, not in the shell the agent opens. The version comes from
+          # qa-setup so the browsers on disk are the ones this can launch.
           uv run --no-project \
             --with "litellm==1.105.7" \
             --with "openhands-sdk==1.62.0" \
             --with "openhands-tools==1.62.0" \
+            --with "playwright==${PLAYWRIGHT_VERSION:-1.65.2}" \
             --with lmnr \
             python "${{ github.action_path }}/agent.py" 2>&1 | tee /tmp/qa-agent.log || status=$?
 

@@ -21,6 +21,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Ensure ffmpeg
+        run: |
+          set -euo pipefail
+          # The gate extracts a still from every recording, so the self-test has
+          # to be able to make one. Present on some images, not on this one.
+          command -v ffmpeg >/dev/null 2>&1 || {
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          }
+          ffmpeg -version | head -1
+
       - name: Build a fixture that looks like an agent's output
         run: |
           set -euo pipefail
@@ -201,7 +212,6 @@ jobs:
           # The block used to be copied: the first copy landed before the comment
           # was posted and the second after it, so a video-less run published a
           # gallery nobody had seen and a re-run published two.
-          count="$(grep -c 'Captures from this run, not cited' /tmp/gallery.out || true)"
           rendered="$(sed -n 's/^rendered-report=//p' /tmp/gallery.out)"
           occurrences="$(grep -c '<details><summary>Captures from this run' "$rendered" || true)"
           if [ "$occurrences" -ne 1 ]; then

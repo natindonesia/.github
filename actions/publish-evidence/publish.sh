@@ -341,12 +341,16 @@ fi
 # captured and the report did not cite is appended, collapsed, and labelled as
 # uncited -- so the reviewer sees it without it being passed off as the report.
 
-if [ -s "$mapping" ] && [ -s "$rendered" ] && ! grep -q '!\[' "$rendered"; then
+if [ -s "$mapping" ] && [ -s "$rendered" ]; then
   uncited=()
   while IFS=$'\t' read -r rel url; do
     [ -n "$rel" ] || continue
     [ "$rel" = "${REPORT:-}" ] && continue
     case "$rel" in posters/*) continue ;; esac
+    # Cited means cited, however the report points at it. A markdown link and an
+    # embed are both a reference; keying on the published URL also catches the
+    # file renamed into a table cell or onto a line of its own.
+    grep -qF -- "$url" "$rendered" && continue
     if is_image "$rel" || is_video "$rel"; then uncited+=("$rel" "$url"); fi
   done < "$mapping"
 

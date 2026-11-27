@@ -86,6 +86,7 @@ def build_prompt() -> str:
     focus = env("QA_FOCUS")
     evidence = env("QA_OUT")
     report_name = REPORT_NAME
+    budget = env("MAX_ITERATIONS", "60")
 
     # The template travels with the agent so the agreed path is a file it can
     # copy and fill, not a shape it has to infer from prose.
@@ -164,16 +165,27 @@ happened.
 
 ## What to do
 
-1. Read the diff and the discussion. Write down the goal of the change in one sentence.
-2. Decide what a user of this product would do to reach the changed behaviour.
-3. Do it, in the browser, at the URLs above. Go to the pages the change touches,
+You have {budget} steps. They run out, and a run that ends without a report has
+verified nothing, however much it saw. So:
+
+1. **Create `{evidence}/{report_name}` from the template now**, before you look at
+   anything: the heading `## QA Report: PARTIAL` and one line saying what you are
+   about to check. Return to it every few steps and fill it in, verdict last. A
+   partial report that exists is worth more than a complete one that never got
+   written.
+2. Read the discussion and the shape of the diff, and write the goal of the change
+   in one sentence. Do not read the changed source line by line: the product is
+   the subject, and the diff is only enough context to know where to look.
+3. Decide what a user of this product would do to reach the changed behaviour.
+4. Do it, in the browser, at the URLs above. Go to the pages the change touches,
    and to the pages next to them — regressions are rarely on the happy path.
-4. Capture what you see: screenshots into `{evidence}` with relative names, a short
+5. Capture what you see: screenshots into `{evidence}` with relative names, a short
    video for anything that only makes sense in motion, and the raw response for
    anything that is an API.
-5. Compare before and after where you have both. Note where they differ, and
+6. Compare before and after where you have both. Note where they differ, and
    whether the difference is the change working or the change breaking something.
-6. Write the report.
+7. Finish the report and stop. Once you have a verdict you can defend, more steps
+   do not make a better answer.
 
 ## The report
 

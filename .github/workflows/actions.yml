@@ -206,6 +206,34 @@ jobs:
           grep -q '!\[after-home.png\]' "$rendered" \
             || { echo "::error::the gallery did not embed the capture"; exit 1; }
 
+      - name: Assert a capture the report links is not repeated in the gallery
+        run: |
+          set -euo pipefail
+          # The report can cite a capture as a link or as an embed. The gallery
+          # is for what the report ignored, so a link has to count as a
+          # citation: the first real run published every screenshot twice.
+          rm -rf fixtures/linked /tmp/linked.out && mkdir -p fixtures/linked/output
+          printf '\x89PNG\r\n\x1a\n' > fixtures/linked/output/before-home.png
+          printf '\x89PNG\r\n\x1a\n' > fixtures/linked/output/ignored.png
+          printf '## QA Report: PASS\n\nSee [the home page](./before-home.png).\n' \
+            > fixtures/linked/output/qa-report.md
+
+          GITHUB_WORKSPACE="$PWD/fixtures/linked" GITHUB_REPOSITORY=natindonesia/selftest \
+            PR_NUMBER=1 GITHUB_RUN_ID=1 BUCKET=b ENDPOINT=e PUBLIC_BASE=https://example.com \
+            AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x DRY_RUN=true POST_COMMENT=false \
+            GITHUB_OUTPUT=/tmp/linked.out EVIDENCE_DIR=output REPORT=qa-report.md \
+            bash actions/publish-evidence/publish.sh > /dev/null 2>&1
+
+          rendered="$(sed -n 's/^rendered-report=//p' /tmp/linked.out)"
+          gallery="$(sed -n '/Captures from this run, not cited/,$p' "$rendered")"
+
+          printf '%s' "$gallery" | grep -q 'ignored.png' \
+            || { echo "::error::the uncited capture was not shown"; exit 1; }
+          if printf '%s' "$gallery" | grep -q 'before-home.png'; then
+            echo "::error::a capture the report linked was repeated in the gallery"
+            exit 1
+          fi
+
       - name: Assert the gallery is appended once, not twice
         run: |
           set -euo pipefail

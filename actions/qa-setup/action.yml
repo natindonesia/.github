@@ -1,0 +1,73 @@
+name: qa-setup
+description: Install the toolchain the verification pipeline needs, whatever the product is.
+
+# Deliberately blind to the product. Flutter, Go, Node, a Frappe bench -- those
+# are the repository's business, and its build job has already run them; by the
+# time anything here executes, the product is an image. What is left is the
+# machinery around the agent: a Python to run it, uv to resolve its pins, a
+# browser to look with, ffmpeg to shrink what it recorded, and gh to read the
+# pull request.
+
+inputs:
+  python-version:
+    description: Python for the agent runtime.
+    required: false
+    default: "3.12"
+  playwright-version:
+    description: Playwright, pinned so a browser update cannot change a verdict.
+    required: false
+    default: "1.65.2"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: true
+
+    - name: Cache the browser
+      id: browser-cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ runner.os }}-${{ inputs.playwright-version }}
+
+    - name: Install Playwright
+      shell: bash
+      env:
+        PLAYWRIGHT_VERSION: ${{ inputs.playwright-version }}
+        CACHE_HIT: ${{ steps.browser-cache.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        # Into the runner's own Python, not a virtualenv: the agent calls it from
+        # a shell it starts itself, in a scratch directory, and has no reason to
+        # know how this was installed.
+        uv pip install --system "playwright==${PLAYWRIGHT_VERSION}"
+        if [ "$CACHE_HIT" = "true" ]; then
+          python -m playwright install-deps chromium
+        else
+          python -m playwright install --with-deps chromium
+        fi
+
+    - name: Ensure ffmpeg and gh
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Present on the standard images; installed only when they are not, so a
+        # different runner image cannot break a run silently.
+        if ! command -v ffmpeg >/dev/null 2>&1; then
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+        fi
+        if ! command -v gh >/dev/null 2>&1; then
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gh
+        fi
+        ffmpeg -version | head -1
+        gh --version | head -1

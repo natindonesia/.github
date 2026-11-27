@@ -1,7 +1,8 @@
 # publish-evidence
 
-Upload a QA run's captures, repoint the report's local links at them, and post
-the result where a reviewer will see it.
+Upload a QA run's evidence -- screenshots, recordings, PDFs, traces, anything
+it produced -- repoint the report's local links at it, and post the result where
+a reviewer will see it.
 
 ```yaml
 - id: evidence
@@ -42,6 +43,7 @@ inline image.
 | `post-comment` | `true` | |
 | `comment-marker` | `<!-- qa-evidence -->` | A re-run updates its own comment. |
 | `max-bytes` | `10485760` | Bigger files are skipped. |
+| `max-video-bytes` | `104857600` | Same, for recordings: they are routinely bigger and worth keeping. |
 | `skip-note` | `""` | Why there is no report on purpose, when the caller skipped the agent. |
 | `dry-run` | `false` | Lists uploads and renders without uploading or commenting. |
 
@@ -52,6 +54,30 @@ inline image.
 | `rendered-report` | Markdown with public URLs. Pass to `qa-verdict`. |
 | `uploaded` | Number of objects uploaded. |
 | `prefix` | Key prefix used. |
+
+## Any file type
+
+Markdown links and HTML `src`/`href` are both repointed, so a recording, a PDF or
+a trace archive travels the same road as a screenshot:
+
+```markdown
+A recording: [the clip](./after-flow.mp4).
+A document: [login spec](./login-spec.pdf).
+```
+
+Uploads carry a real content type per extension, because a PDF served as
+`application/octet-stream` downloads instead of opening.
+
+Every recording also gets a still, extracted with `ffmpeg` one second in and
+uploaded as `posters/<name>.jpg`. A link to an mp4 is not something a reviewer
+can look at -- GitHub will not play one inline -- so the gallery renders the
+still and links it at the recording:
+
+```markdown
+[![after-flow.mp4](.../posters/after-flow.jpg)](.../after-flow.mp4)
+```
+
+A recording too short to have a frame one second in falls back to its first.
 
 ## Behaviour worth knowing
 

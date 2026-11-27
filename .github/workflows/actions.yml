@@ -24,11 +24,17 @@ jobs:
       - name: Build a fixture that looks like an agent's output
         run: |
           set -euo pipefail
-          mkdir -p fixtures/output/shots
+          mkdir -p fixtures/output/shots fixtures/output/traces
           # One pixel PNGs: the action only cares about names and content types.
           printf '\x89PNG\r\n\x1a\n' > fixtures/output/before-home.png
           printf '\x89PNG\r\n\x1a\n' > fixtures/output/after-home.png
           printf '\x89PNG\r\n\x1a\n' > fixtures/output/shots/after-detail.png
+          # A recording and a document: the two artefacts whose links used to be
+          # left behind, because only images were repointed.
+          ffmpeg -loglevel error -y -f lavfi -i testsrc=duration=1:size=320x240:rate=10 \
+            -pix_fmt yuv420p fixtures/output/after-flow.mp4
+          printf '%%PDF-1.4\n' > fixtures/output/login-spec.pdf
+          printf '{"log":{}}\n' > fixtures/output/traces/run.har
           cat > fixtures/output/qa-report.md <<'MD'
           ## QA Report: PASS WITH ISSUES
 
@@ -39,6 +45,11 @@ jobs:
 
           Also in HTML and by bare name: <img src="../output/after-home.png">
           and ![detail](after-detail.png).
+
+          A recording: <video src="./after-flow.mp4" controls></video> and
+          [the same clip](./after-flow.mp4).
+
+          Documents: [login spec](./login-spec.pdf), [trace](./traces/run.har).
 
           An external link must survive untouched: ![gh](https://example.com/x.png).
           MD
@@ -59,11 +70,26 @@ jobs:
         run: |
           set -euo pipefail
           echo "uploaded=${{ steps.evidence.outputs.uploaded }}, report=${REPORT}"
-          grep -q 'https://f005.backblazeb2.com/file/natindonesia-qa-screenshots/repo/' "$REPORT"
+          base='https://f005.backblazeb2.com/file/natindonesia-qa-screenshots/repo/'
+          grep -q "${base}" "$REPORT"
           grep -q 'after-home.png "home screen"' "$REPORT"      # title preserved
           grep -q 'https://example.com/x.png' "$REPORT"          # external untouched
           grep -q 'after-detail.png' "$REPORT"                   # bare name resolved
           ! grep -q '](./' "$REPORT"                             # no local link left
+
+      - name: Assert recordings and documents travel the same road as images
+        env:
+          REPORT: ${{ steps.evidence.outputs.rendered-report }}
+        run: |
+          set -euo pipefail
+          base='https://f005.backblazeb2.com/file/natindonesia-qa-screenshots/repo/'
+          # A markdown link to a video, an HTML src, a markdown link to a PDF and
+          # to a trace archive: all four used to be published and then left as
+          # local paths, which renders as a broken link where evidence should be.
+          grep -qE "\]\\(${base}[^)]*after-flow\.mp4\\)" "$REPORT"
+          grep -qE "src=\"${base}[^\"]*after-flow\.mp4\"" "$REPORT"
+          grep -qE "\]\\(${base}[^)]*login-spec\.pdf\\)" "$REPORT"
+          grep -qE "\]\\(${base}[^)]*traces/run\.har\\)" "$REPORT"
 
       - name: Publish again, this time saying why there is no report
         id: skipped
@@ -150,6 +176,8 @@ jobs:
           rm -rf fixtures/plain /tmp/gallery.out && mkdir -p fixtures/plain/output
           printf '\x89PNG\r\n\x1a\n' > fixtures/plain/output/before-home.png
           printf '\x89PNG\r\n\x1a\n' > fixtures/plain/output/after-home.png
+          ffmpeg -loglevel error -y -f lavfi -i testsrc=duration=1:size=320x240:rate=10 \
+            -pix_fmt yuv420p fixtures/plain/output/after-flow.mp4
           printf '## QA Report: PASS\n\nProse only.\n' > fixtures/plain/output/qa-report.md
 
           GITHUB_WORKSPACE="$PWD/fixtures/plain" GITHUB_REPOSITORY=natindonesia/selftest \
@@ -166,3 +194,62 @@ jobs:
             || { echo "::error::a report with no images published no gallery"; exit 1; }
           grep -q '!\[after-home.png\]' "$rendered" \
             || { echo "::error::the gallery did not embed the capture"; exit 1; }
+
+      - name: Assert the gallery is appended once, not twice
+        run: |
+          set -euo pipefail
+          # The block used to be copied: the first copy landed before the comment
+          # was posted and the second after it, so a video-less run published a
+          # gallery nobody had seen and a re-run published two.
+          count="$(grep -c 'Captures from this run, not cited' /tmp/gallery.out || true)"
+          rendered="$(sed -n 's/^rendered-report=//p' /tmp/gallery.out)"
+          occurrences="$(grep -c '<details><summary>Captures from this run' "$rendered" || true)"
+          if [ "$occurrences" -ne 1 ]; then
+            echo "::error::the uncited gallery appears $occurrences time(s), expected 1"
+            exit 1
+          fi
+
+      - name: Assert a recording gets a poster and is shown as a still
+        run: |
+          set -euo pipefail
+          rendered="$(sed -n 's/^rendered-report=//p' /tmp/gallery.out)"
+          # A bare mp4 link is not something a reviewer can look at, and GitHub
+          # will not play one inline. The still is what makes the recording
+          # visible; the link is what makes it playable.
+          grep -q 'posters/after-flow.jpg' "$rendered" \
+            || { echo "::error::the recording was published without a poster"; exit 1; }
+          grep -qE '\[\!\[after-flow\.mp4\]\([^)]*posters/after-flow\.jpg\)\]\([^)]*after-flow\.mp4\)' "$rendered" \
+            || { echo "::error::the recording is not rendered as a linking still"; exit 1; }
+
+  workflow:
+    name: actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint the workflows
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+
+  pipeline:
+    name: qa-verify dry run
+    # Exercises the reusable workflow end to end -- contract, compose, probe,
+    # teardown -- with a two-nginx fixture standing in for a product.
+    #
+    # The workflow reaches its own actions through `@v1`, so this proves the
+    # released combination works rather than the branch. The actions themselves
+    # are proven above, from local paths.
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      checks: write
+      packages: read
+    uses: ./.github/workflows/qa-verify.yml
+    with:
+      runner: ubuntu-latest
+      config-path: fixtures/app/qa.yml
+      compose-path: fixtures/app/compose.verify.yaml
+      dry-run: true

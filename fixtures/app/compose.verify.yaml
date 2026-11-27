@@ -1,0 +1,33 @@
+# The shape a repository's compose.verify.yaml must have.
+#
+#   * `after` is required and must be the image built from the change.
+#   * `before` is optional; without it the run is single-mode.
+#   * everything else -- databases, caches, a backend both revisions talk to --
+#     is the repository's business and carries no profile.
+#   * a `seed` service, if present, is run once after the stack is up.
+#
+# The pipeline sets AFTER_IMAGE, BEFORE_IMAGE, QA_MODE and QA_PROJECT, and
+# enables the profiles. Ports published here must match `urls` in qa.yml.
+
+services:
+  after:
+    image: ${AFTER_IMAGE:?set by the pipeline}
+    profiles: [after]
+    ports:
+      - "8200:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  before:
+    image: ${BEFORE_IMAGE:?set by the pipeline}
+    profiles: [before]
+    ports:
+      - "8100:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

@@ -1,0 +1,120 @@
+name: qa-agent
+description: Ask an agent to verify a change by using a product that is already running.
+
+# The agent gets a product, not a repository: no checkout to build, no service to
+# start, no credentials to provision. What it gets is a browser-capable shell, the
+# two URLs, the accounts, and one instruction it cannot talk itself out of -- tell
+# what was observed apart from what it means.
+#
+# The runtime is pinned here rather than in every repository, because a model
+# whose tool layer changed under it is a different judge.
+
+inputs:
+  urls:
+    description: JSON object of URLs the product answers at.
+    required: true
+  mode:
+    description: compare | single
+    required: false
+    default: single
+  accounts:
+    description: JSON array of accounts the agent may sign in with.
+    required: false
+    default: "[]"
+  focus:
+    description: What this product is, in the repository's words.
+    required: false
+    default: ""
+  evidence-dir:
+    description: Where the agent writes its report and captures.
+    required: true
+  model:
+    description: LLM the agent runs on.
+    required: false
+    default: openrouter/deepseek/deepseek-v4.1-flash-1017
+  max-budget:
+    description: Ceiling on spend, in dollars.
+    required: false
+    default: "0.75"
+  max-iterations:
+    description: Ceiling on iterations.
+    required: false
+    default: "60"
+  timeout-minutes:
+    description: Ceiling on wall clock. Longer only means "allowed to flail longer".
+    required: false
+    default: "18"
+
+runs:
+  using: composite
+  steps:
+    - name: Run the agent
+      id: run
+      shell: bash
+      timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+      env:
+        LLM_MODEL: ${{ inputs.model }}
+        MAX_BUDGET: ${{ inputs.max-budget }}
+        MAX_ITERATIONS: ${{ inputs.max-iterations }}
+        QA_MODE: ${{ inputs.mode }}
+        QA_URLS: ${{ inputs.urls }}
+        QA_ACCOUNTS_JSON: ${{ inputs.accounts }}
+        QA_FOCUS: ${{ inputs.focus }}
+        QA_OUT: ${{ inputs.evidence-dir }}
+        QA_RUNTIME: ${{ github.workspace }}/.qa-runtime
+        QA_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+        PR_BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+        PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+        REPO_NAME: ${{ github.repository }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -o pipefail
+
+        # GitHub answers 500 for a busy pull request diff ("this diff is
+        # temporarily unavailable"). The agent cannot start without it, and a
+        # busy server is not a verdict about this change.
+        attempt=1
+        status=0
+        while :; do
+          status=0
+          uv run --no-project \
+            --with "litellm==1.105.7" \
+            --with "openhands-sdk==1.62.0" \
+            --with "openhands-tools==1.62.0" \
+            --with lmnr \
+            python "${{ github.action_path }}/agent.py" 2>&1 | tee /tmp/qa-agent.log || status=$?
+
+          if grep -q "diff is temporarily unavailable" /tmp/qa-agent.log && [ "$attempt" -lt 3 ]; then
+            attempt=$((attempt + 1))
+            echo "::warning title=Retrying the agent::the pull request diff was temporarily unavailable"
+            sleep 30
+            continue
+          fi
+          break
+        done
+
+        if grep -q "reached maximum iterations limit" /tmp/qa-agent.log; then
+          echo "::error title=QA agent ran out of iterations::No verdict was produced; see the step log."
+          exit 1
+        fi
+
+        if ! command -v ffmpeg >/dev/null 2>&1; then exit "$status"; fi
+
+        # A recording that cannot be watched is not evidence. Shrink anything
+        # heavy before publishing, and leave the original in place if ffmpeg
+        # declines.
+        while IFS= read -r -d '' video; do
+          size="$(stat -c %s "$video")"
+          [ "$size" -gt 8388608 ] || continue
+          small="${video%.*}.small.mp4"
+          if ffmpeg -loglevel error -y -i "$video" -vf "scale='min(1280,iw)':-2,fps=15" \
+               -c:v libx264 -preset veryfast -crf 30 -an "$small"; then
+            mv "$small" "$video"
+            echo "shrunk $(basename "$video") from $((size / 1048576))MB"
+          fi
+        done < <(find "$QA_OUT" -type f \( -name '*.mp4' -o -name '*.webm' -o -name '*.mov' \) -print0 2>/dev/null)
+
+        exit "$status"

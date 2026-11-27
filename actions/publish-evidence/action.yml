@@ -71,6 +71,12 @@ inputs:
     description: Skip files larger than this; a multi-hundred-megabyte video is not evidence.
     required: false
     default: "10485760"
+  max-video-bytes:
+    description: |
+      Ceiling for recordings specifically. The agent shrinks what it records, but
+      a run that forgot costs more than a screenshot and is still worth keeping.
+    required: false
+    default: "104857600"
   head-sha:
     description: |
       Commit under test. When no report file exists, the newest pull-request
@@ -121,6 +127,7 @@ runs:
         POST_COMMENT: ${{ inputs.post-comment }}
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         MAX_BYTES: ${{ inputs.max-bytes }}
+        MAX_VIDEO_BYTES: ${{ inputs.max-video-bytes }}
         HEAD_SHA: ${{ inputs.head-sha }}
         SKIP_NOTE: ${{ inputs.skip-note }}
         DRY_RUN: ${{ inputs.dry-run }}

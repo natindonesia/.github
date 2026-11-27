@@ -1,0 +1,162 @@
+name: qa-harness
+description: Read qa.yml, start the product a change provides, probe it, and stop it.
+
+# The four moments of the verification environment, behind one action:
+#
+#   resolve      before the scope gate. Reads the repository's contract and
+#                decides whether there is a baseline. Touches nothing.
+#   up           after the gate. Pulls the two images and starts the stack the
+#                repository's compose file describes, then waits until the
+#                declared URLs answer.
+#   environment  writes the note the agent reads: which URLs, which roles.
+#   down         always(). Stops the project and captures the product log.
+#
+# See README.md, "The verification pipeline".
+
+inputs:
+  command:
+    description: resolve | up | environment | down
+    required: true
+  config:
+    description: Absolute path to the repository's qa.yml, read from the base checkout.
+    required: false
+    default: ""
+  compose:
+    description: Absolute path to the repository's compose.verify.yaml.
+    required: false
+    default: ""
+  after-image:
+    description: Image built from the change.
+    required: false
+    default: ""
+  before-image:
+    description: Image of the baseline. Empty means single mode.
+    required: false
+    default: ""
+  mode:
+    description: compare | single
+    required: false
+    default: ""
+  project:
+    description: Compose project name, unique to this run.
+    required: false
+    default: ""
+  urls:
+    description: JSON object of declared URLs, as resolved by `resolve`.
+    required: false
+    default: ""
+  accounts:
+    description: JSON array of declared accounts.
+    required: false
+    default: "[]"
+  evidence-dir:
+    description: Evidence directory the agent writes into.
+    required: false
+    default: ""
+  log:
+    description: Where `down` writes the product log.
+    required: false
+    default: product.log
+  dry-run:
+    description: Skip the registry and the image identity checks.
+    required: false
+    default: "false"
+
+outputs:
+  product-paths:
+    description: Regular expression of the files that can change the product.
+    value: ${{ steps.run.outputs.product-paths }}
+  after-image:
+    description: Image built from the change, after `{base_sha}` substitution.
+    value: ${{ steps.run.outputs.after-image }}
+  before-image:
+    description: Baseline image, after substitution. Empty in single mode.
+    value: ${{ steps.run.outputs.before-image }}
+  mode:
+    description: compare when a baseline was declared and could be reached.
+    value: ${{ steps.run.outputs.mode }}
+  urls:
+    description: JSON object of URLs the product answers at.
+    value: ${{ steps.run.outputs.urls }}
+  accounts:
+    description: JSON array of accounts the agent may sign in with.
+    value: ${{ steps.run.outputs.accounts }}
+  focus:
+    description: What this product is, in the repository's words.
+    value: ${{ steps.run.outputs.focus }}
+  probes:
+    description: JSON object of what each URL answered with.
+    value: ${{ steps.run.outputs.probes }}
+  notes:
+    description: JSON array of degradations, such as a baseline that never answered.
+    value: ${{ steps.run.outputs.notes }}
+  max-budget:
+    description: Ceiling on agent spend, in dollars.
+    value: ${{ steps.run.outputs.max-budget }}
+  max-iterations:
+    description: Ceiling on agent iterations.
+    value: ${{ steps.run.outputs.max-iterations }}
+  agent-timeout:
+    description: Ceiling on agent wall clock, in minutes.
+    value: ${{ steps.run.outputs.agent-timeout }}
+
+runs:
+  using: composite
+  steps:
+    - name: Ensure uv
+      uses: astral-sh/setup-uv@v6
+      with:
+        enable-cache: true
+
+    - id: run
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        CONFIG: ${{ inputs.config }}
+        COMPOSE: ${{ inputs.compose }}
+        AFTER_IMAGE: ${{ inputs.after-image }}
+        BEFORE_IMAGE: ${{ inputs.before-image }}
+        MODE: ${{ inputs.mode }}
+        QA_PROJECT: ${{ inputs.project }}
+        QA_URLS: ${{ inputs.urls }}
+        QA_ACCOUNTS: ${{ inputs.accounts }}
+        QA_OUT: ${{ inputs.evidence-dir }}
+        LOG_PATH: ${{ inputs.log }}
+        QA_DRY_RUN: ${{ inputs.dry-run }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+
+        # One harness, four moments. PyYAML is resolved by uv at call time so the
+        # runner image does not have to carry it, and the version is pinned so a
+        # contract that parses today parses the same way next month.
+        argv=()
+
+        case "$COMMAND" in
+          resolve)
+            argv+=(--config "$CONFIG")
+            if [ -n "$AFTER_IMAGE" ]; then argv+=(--after-image "$AFTER_IMAGE"); fi
+            if [ "$QA_DRY_RUN" = "true" ]; then argv+=(--dry-run); fi
+            ;;
+          up)
+            argv+=(--compose "$COMPOSE" --after-image "$AFTER_IMAGE"
+                  --project "$QA_PROJECT" --urls "$QA_URLS" --evidence-dir "$QA_OUT")
+            if [ -n "$BEFORE_IMAGE" ]; then argv+=(--before-image "$BEFORE_IMAGE"); fi
+            if [ -n "$MODE" ]; then argv+=(--mode "$MODE"); fi
+            if [ "$QA_DRY_RUN" = "true" ]; then argv+=(--dry-run); fi
+            ;;
+          environment)
+            argv+=(--mode "$MODE" --urls "$QA_URLS" --accounts "$QA_ACCOUNTS"
+                  --evidence-dir "$QA_OUT")
+            ;;
+          down)
+            argv+=(--compose "$COMPOSE" --project "$QA_PROJECT" --log "$LOG_PATH")
+            ;;
+          *)
+            echo "::error title=qa-harness::unknown command '$COMMAND'"
+            exit 1
+            ;;
+        esac
+
+        uv run --no-project --with "pyyaml==6.0.2" \
+          python "${{ github.action_path }}/harness.py" "$COMMAND" "${argv[@]}"

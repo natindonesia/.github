@@ -1,0 +1,332 @@
+name: qa-verify
+
+# Verify a pull request by using the product, once, for every repository in
+# natindonesia.
+#
+# The repository supplies three things: the images to compare, where they answer
+# once started, and the accounts to sign in with. Everything else -- checking out
+# both revisions, refusing a change that edits its own verifier, deciding whether
+# the change can affect the product, starting the stack, telling the agent what
+# it is looking at, uploading the evidence, and scoring the report -- happens
+# here.
+#
+# A caller is a dozen lines:
+#
+#   jobs:
+#     qa:
+#       uses: natindonesia/.github/.github/workflows/qa-verify.yml@v1
+#       secrets: inherit
+#
+# The contract (what `qa.yml` and `compose.verify.yaml` must provide) is in
+# README.md, under "The verification pipeline".
+#
+# The agent is not allowed to build anything. It receives a product that is
+# already running, at the URLs the repository declared, and its job is to use it
+# as a reviewer would. That is the whole point: a gate that rebuilds the
+# environment on every run can spend its budget on `docker build` instead of on
+# looking at the change, and a build that fails inside the gate is a confusing
+# verdict rather than a build failure.
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: |
+          Runner label. An input because `runs-on` is resolved before any step
+          runs and therefore cannot come from `qa.yml`.
+        type: string
+        default: ubuntu-24.04
+      after-image:
+        description: |
+          The image built from this pull request, usually the output of the
+          repository's build job. When empty, `images.after` in `qa.yml` is used.
+        type: string
+        default: ""
+      config-path:
+        description: Path to the repository's `qa.yml`, relative to the repository root.
+        type: string
+        default: .github/qa.yml
+      compose-path:
+        description: Path to the compose file that starts the product.
+        type: string
+        default: compose.verify.yaml
+      model:
+        description: LLM model the agent runs on.
+        type: string
+        default: openrouter/deepseek/deepseek-v4.1-flash-1017
+      dry-run:
+        description: |
+          Exercise the pipeline without the agent, storage, comments or a check
+          run. Used by this repository's own self-test.
+        type: boolean
+        default: false
+    secrets:
+      OPENROUTER_API_KEY:
+        required: false
+      QA_EVIDENCE_B2_KEY_ID:
+        required: false
+      QA_EVIDENCE_B2_APPLICATION_KEY:
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  checks: write
+  packages: read
+
+jobs:
+  qa:
+    name: qa changes
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    concurrency:
+      group: qa-verify-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    env:
+      # Namespaced by run, so two runs on one self-hosted host cannot share
+      # containers, and teardown can only ever touch its own.
+      QA_PROJECT: qa-${{ github.run_id }}-${{ github.run_attempt }}
+      QA_HARNESS: ${{ github.workspace }}/harness
+      QA_RUNTIME: ${{ github.workspace }}/.qa-runtime
+      QA_OUT: ${{ github.workspace }}/qa-evidence
+      QA_CONFIG: ${{ github.workspace }}/harness/${{ inputs.config-path }}
+      QA_COMPOSE: ${{ github.workspace }}/harness/${{ inputs.compose-path }}
+      QA_AFTER_INPUT: ${{ inputs.after-image }}
+      QA_DRY_RUN: ${{ inputs.dry-run }}
+      # One definition: the scope gate, the verifier refusal and the report all
+      # ask the same question about which files can change the product.
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # A job env, because `if:` cannot read `secrets` directly.
+      QA_AGENT_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+    steps:
+      - name: Check out the harness
+        uses: actions/checkout@v4
+        with:
+          # The base branch tip, not `base.sha`: the SHA in the event payload is
+          # whatever GitHub recorded when it last computed the merge ref, which
+          # lags behind the branch and silently runs a stale harness.
+          ref: ${{ github.event.pull_request.base.ref }}
+          path: harness
+          fetch-depth: 0
+
+      # Everything the application side of the contract declares is read from
+      # `harness/`, never from `change/`: those files are the gate, and a change
+      # is not allowed to describe itself as needing less verification.
+      - name: Read the verification contract
+        id: config
+        uses: natindonesia/.github/actions/qa-harness@v1
+        with:
+          command: resolve
+          config: ${{ env.QA_CONFIG }}
+          compose: ${{ env.QA_COMPOSE }}
+          after-image: ${{ env.QA_AFTER_INPUT }}
+          dry-run: ${{ inputs.dry-run }}
+
+      - name: Refuse a change that edits its own verifier
+        id: refuse
+        working-directory: harness
+        env:
+          CONFIG_PATH: ${{ inputs.config-path }}
+          COMPOSE_PATH: ${{ inputs.compose-path }}
+          PRODUCT_PATHS: ${{ steps.config.outputs.product-paths }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin "$HEAD_SHA"
+
+          # `--diff-filter=M`: adding a verifier file is how it gets there;
+          # modifying one that already exists on the base branch is the problem.
+          touched="$(git diff --diff-filter=M --name-only "$BASE_SHA" "$HEAD_SHA" -- \
+            "$CONFIG_PATH" "$COMPOSE_PATH" .github/workflows/verify.yml \
+            .github/verify .github/qa 2>/dev/null || true)"
+          if [ -z "$touched" ]; then
+            exit 0
+          fi
+
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
+          if [ -z "$(printf '%s\n' "$changed" | grep -E "$PRODUCT_PATHS" || true)" ]; then
+            # A pull request that only repairs the gate is not judged by it: it
+            # is declared out of scope below, so nothing certifies itself, and
+            # the gate stays repairable after it breaks.
+            echo "::warning title=Out of scope::this change only edits the verifier, so it is not judged by it"
+            exit 0
+          fi
+
+          echo "::error title=Self-certification refused::this change edits the verifier that judges it:"
+          printf '%s\n' "$touched" | sed 's/^/  /'
+          exit 1
+
+      - name: Decide whether this change can affect the product
+        id: scope
+        working-directory: harness
+        env:
+          PRODUCT_PATHS: ${{ steps.config.outputs.product-paths }}
+        run: |
+          set -uo pipefail
+          git fetch --no-tags --quiet origin "$HEAD_SHA"
+          changed="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || true)"
+          affected="$(printf '%s\n' "$changed" | grep -E "$PRODUCT_PATHS" || true)"
+
+          # A dry run is this repository testing itself, on a diff that is about
+          # the pipeline rather than about a product. Forcing the in-scope branch
+          # is the point of it: otherwise the only runs that ever exercise the
+          # environment are the ones somebody happens to break a product for.
+          if [ "$QA_DRY_RUN" = "true" ]; then
+            echo "applies=true" >> "$GITHUB_OUTPUT"
+            echo "dry run: exercising the full path regardless of the diff"
+            exit 0
+          fi
+
+          if [ -z "$affected" ]; then
+            echo "applies=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### QA not applicable"
+              echo
+              echo "This change touches nothing the product serves:"
+              echo
+              printf '%s\n' "$changed" | sed 's/^/- `/;s/$/`/'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "no product files changed; skipping the product and the agent"
+            exit 0
+          fi
+
+          echo "applies=true" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Product files changed"
+            echo
+            printf '%s\n' "$affected" | sed 's/^/- `/;s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install the verification toolchain
+        if: steps.scope.outputs.applies == 'true'
+        uses: natindonesia/.github/actions/qa-setup@v1
+
+      - name: Start the product the repository provides
+        id: up
+        if: steps.scope.outputs.applies == 'true'
+        uses: natindonesia/.github/actions/qa-harness@v1
+        with:
+          command: up
+          config: ${{ env.QA_CONFIG }}
+          compose: ${{ env.QA_COMPOSE }}
+          after-image: ${{ steps.config.outputs.after-image }}
+          before-image: ${{ steps.config.outputs.before-image }}
+          mode: ${{ steps.config.outputs.mode }}
+          project: ${{ env.QA_PROJECT }}
+          evidence-dir: ${{ env.QA_OUT }}
+          dry-run: ${{ inputs.dry-run }}
+
+      - name: Write down what the agent is being given
+        if: steps.scope.outputs.applies == 'true'
+        uses: natindonesia/.github/actions/qa-harness@v1
+        with:
+          command: environment
+          config: ${{ env.QA_CONFIG }}
+          mode: ${{ steps.up.outputs.mode }}
+          evidence-dir: ${{ env.QA_OUT }}
+          urls: ${{ steps.config.outputs.urls }}
+          accounts: ${{ steps.config.outputs.accounts }}
+
+      - name: Run the QA agent
+        id: agent
+        if: steps.scope.outputs.applies == 'true' && inputs.dry-run == false && env.QA_AGENT_KEY != ''
+        uses: natindonesia/.github/actions/qa-agent@v1
+        with:
+          urls: ${{ steps.config.outputs.urls }}
+          accounts: ${{ steps.config.outputs.accounts }}
+          mode: ${{ steps.up.outputs.mode }}
+          focus: ${{ steps.config.outputs.focus }}
+          evidence-dir: ${{ env.QA_OUT }}
+          model: ${{ inputs.model }}
+          max-budget: ${{ steps.config.outputs.max-budget }}
+          max-iterations: ${{ steps.config.outputs.max-iterations }}
+          timeout-minutes: ${{ steps.config.outputs.agent-timeout }}
+        env:
+          LLM_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Note a missing agent key
+        if: steps.scope.outputs.applies == 'true' && inputs.dry-run == false && env.QA_AGENT_KEY == ''
+        run: echo "::notice title=No agent::OPENROUTER_API_KEY is not configured, so the product was started and probed but no agent judged it."
+
+      - name: Collect evidence the agent left elsewhere
+        if: always() && steps.scope.outputs.applies == 'true'
+        run: |
+          set -uo pipefail
+          mkdir -p "$QA_OUT"
+          for stray in "${RUNNER_WORKSPACE}/output" "$(dirname "$GITHUB_WORKSPACE")/output" "$QA_RUNTIME/output"; do
+            [ -d "$stray" ] || continue
+            [ "$(readlink -f "$stray")" = "$(readlink -f "$QA_OUT")" ] && continue
+            echo "collecting evidence from ${stray}"
+            find "$stray" -maxdepth 2 -type f \
+              \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' -o -name '*.webp' \
+              -o -name '*.mp4' -o -name '*.webm' -o -name '*.pdf' -o -name '*.json' -o -name '*.har' \
+              -o -name '*.md' -o -name '*.log' -o -name '*.txt' -o -name '*.zip' \) \
+              -exec cp -n {} "$QA_OUT"/\;
+          done
+          ls -la "$QA_OUT" || true
+
+      - name: Keep the evidence as an artifact too
+        if: always() && steps.scope.outputs.applies == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence
+          path: ${{ env.QA_OUT }}
+          retention-days: 14
+          # Whether a report exists is the verdict's call; a run that captured
+          # nothing has to say so rather than fail to upload.
+          if-no-files-found: warn
+
+      - name: Publish the evidence
+        id: evidence
+        if: always() && steps.scope.outputs.applies == 'true'
+        uses: natindonesia/.github/actions/publish-evidence@v1
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          evidence-dir: ${{ env.QA_OUT }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          dry-run: ${{ inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.QA_EVIDENCE_B2_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.QA_EVIDENCE_B2_APPLICATION_KEY }}
+
+      - name: Publish the verdict as a check
+        if: always()
+        uses: natindonesia/.github/actions/qa-verdict@v1
+        with:
+          pr-number: ${{ github.event.pull_request.number }}
+          head-sha: ${{ github.event.pull_request.head.sha }}
+          report-path: ${{ steps.evidence.outputs.rendered-report }}
+          run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          not-applicable: ${{ steps.scope.outputs.applies == 'false' }}
+          not-applicable-text: >-
+            No product files changed in `${{ github.event.pull_request.head.sha }}`,
+            so there was nothing for an agent to exercise.
+          fail-on-no-report: ${{ inputs.dry-run == false && steps.scope.outputs.applies == 'true' && env.QA_AGENT_KEY != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # The self-test has no pull request and no check to publish to.
+          DRY_RUN: ${{ inputs.dry-run }}
+
+      - name: Stop the product
+        if: always() && steps.scope.outputs.applies == 'true'
+        uses: natindonesia/.github/actions/qa-harness@v1
+        with:
+          command: down
+          compose: ${{ env.QA_COMPOSE }}
+          project: ${{ env.QA_PROJECT }}
+          log: ${{ runner.temp }}/product.log
+
+      - name: Upload the product log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-log
+          path: ${{ runner.temp }}/product.log
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,0 +1,27 @@
+# Fixture contract for this repository's own self-test.
+#
+# It looks like a real repository's qa.yml on purpose: the self-test exists to
+# prove that a contract of this shape is read, started, probed and stopped. The
+# product is two nginx containers, because the point is the pipeline, not nginx.
+
+product-paths: '^(fixtures/app/site/)'
+
+images:
+  after: nginx:alpine
+  before: nginx:alpine
+
+urls:
+  after: http://127.0.0.1:8200
+  before: http://127.0.0.1:8100
+
+accounts:
+  - role: admin
+    email: qa@example.test
+    password: not-a-real-password
+
+focus: Two pages that must render, one of which carries a heading the gate can see.
+
+agent:
+  max-budget: 0.05
+  max-iterations: 2
+  agent-timeout: 5

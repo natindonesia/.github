@@ -6,6 +6,9 @@ like `./after-home.png`, `output/after-home.png`, or an absolute path. This maps
 each one to the object that publish.sh just uploaded and writes a second copy of
 the document with public URLs, which is what gets posted.
 
+Markdown links and HTML `src`/`href` are both repointed, so a recording, a PDF
+or a trace archive travels the same road as a screenshot.
+
 Anything that cannot be resolved is an error: a report that points at a capture
 nobody uploaded renders as a broken image, and a broken image where evidence
 should be is worse than a missing one.
@@ -25,8 +28,9 @@ RENDERED = Path(os.environ["RENDERED"])
 
 # ![alt](target) and [text](target), target optionally carrying a "title".
 MARKDOWN = re.compile(r"(!?\[[^\]]*\]\()([^)\s]+)((?:\s+\"[^\"]*\")?\))")
-# <img src="target"> and src='target'
-HTML_IMG = re.compile(r"""(<img\b[^>]*?\bsrc\s*=\s*)(["'])([^"']+)(\2)""", re.IGNORECASE)
+# src="target" and href='target', in any HTML tag: <img>, <video>, <source>, <a>.
+# A recording and a PDF are linked, not embedded, so both attributes matter.
+HTML_ATTR = re.compile(r"""(\b(?:src|href)\s*=\s*)(["'])([^"']+)(\2)""", re.IGNORECASE)
 ABSOLUTE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
 
 
@@ -91,7 +95,7 @@ def main() -> int:
         url = substitute(target)
         return match.group(0) if url is None else f"{head}{quote}{url}{close}"
 
-    rendered = HTML_IMG.sub(on_html, MARKDOWN.sub(on_markdown, doc))
+    rendered = HTML_ATTR.sub(on_html, MARKDOWN.sub(on_markdown, doc))
 
     if missing:
         listed = ", ".join(sorted(set(missing)))
@@ -102,7 +106,10 @@ def main() -> int:
         )
         return 1
 
-    unreferenced = sorted(set(urls.values()) - referenced)
+    # Posters are how a recording is shown, not artefacts a report is expected to
+    # cite: reporting them as "uploaded but not shown" would be noise on every run
+    # that captured a video.
+    unreferenced = sorted(u for u in set(urls.values()) - referenced if "/posters/" not in u)
     if unreferenced:
         print("Uploaded but not shown in the report: " + ", ".join(unreferenced))
 

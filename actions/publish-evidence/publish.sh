@@ -22,6 +22,10 @@ COMMENT_MARKER="${COMMENT_MARKER:-<!-- qa-evidence -->}"
 HEAD_SHA="${HEAD_SHA:-}"
 DRY_RUN="${DRY_RUN:-false}"
 MAX_BYTES="${MAX_BYTES:-10485760}"
+# Recordings are the one artefact that is routinely bigger than a screenshot and
+# routinely worth keeping. The agent shrinks them; this is the backstop for the
+# one it forgot to.
+MAX_VIDEO_BYTES="${MAX_VIDEO_BYTES:-104857600}"
 
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 PR="${PR_NUMBER:?PR_NUMBER is required}"
@@ -104,8 +108,19 @@ fi
 files=()
 if [ "$root_missing" = false ]; then
   while IFS= read -r -d '' file; do
+    case "${file##*.}" in
+      mp4|webm|mov) cap="$MAX_VIDEO_BYTES" ;;
+      *)            cap="$MAX_BYTES" ;;
+    esac
+    size="$(stat -c %s "$file" 2>/dev/null || echo 0)"
+    if [ "$size" -ge "$cap" ]; then
+      rel="${file#"$root"/}"
+      printf '::warning title=Evidence file skipped::%s is %sMB, over the %s byte cap for its type\n' \
+        "$rel" "$((size / 1048576))" "$cap"
+      continue
+    fi
     files+=("$file")
-  done < <(find "$root" -type f -not -name '.*' -size -"${MAX_BYTES}"c -print0 | sort -z)
+  done < <(find "$root" -type f -not -name '.*' -print0 | sort -z)
 fi
 
 if [ ${#files[@]} -eq 0 ] && [ -z "$report_path" ]; then
@@ -153,20 +168,65 @@ fi
 
 content_type() {
   case "${1##*.}" in
-    png)         echo "image/png" ;;
-    jpg|jpeg)    echo "image/jpeg" ;;
-    gif)         echo "image/gif" ;;
-    webp)        echo "image/webp" ;;
-    svg)         echo "image/svg+xml" ;;
-    mp4)         echo "video/mp4" ;;
-    webm)        echo "video/webm" ;;
-    mov)         echo "video/quicktime" ;;
-    pdf)         echo "application/pdf" ;;
-    json)        echo "application/json" ;;
-    txt|log|md)  echo "text/plain; charset=utf-8" ;;
-    *)           echo "application/octet-stream" ;;
+    png)          echo "image/png" ;;
+    jpg|jpeg)     echo "image/jpeg" ;;
+    gif)          echo "image/gif" ;;
+    webp)         echo "image/webp" ;;
+    svg)          echo "image/svg+xml" ;;
+    mp4)          echo "video/mp4" ;;
+    webm)         echo "video/webm" ;;
+    mov)          echo "video/quicktime" ;;
+    pdf)          echo "application/pdf" ;;
+    json|har)     echo "application/json" ;;
+    zip)          echo "application/zip" ;;
+    csv)          echo "text/csv" ;;
+    html|htm)     echo "text/html" ;;
+    xml)          echo "application/xml" ;;
+    vtt)          echo "text/vtt" ;;
+    md)           echo "text/markdown; charset=utf-8" ;;
+    txt|log)      echo "text/plain; charset=utf-8" ;;
+    *)            echo "application/octet-stream" ;;
   esac
 }
+
+is_image() {
+  case "${1##*.}" in
+    png|jpg|jpeg|gif|webp|svg) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_video() {
+  case "${1##*.}" in
+    mp4|webm|mov) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# --- posters for the recordings ----------------------------------------------
+#
+# A link to an mp4 is not something a reviewer can look at, and GitHub's comment
+# renderer will not play one inline. A still from the recording, linking to it,
+# is. Generated next to the video rather than in the report, so the agent never
+# has to know this happens.
+
+if [ "$root_missing" = false ] && command -v ffmpeg >/dev/null 2>&1; then
+  while IFS= read -r -d '' video; do
+    rel="${video#"$root"/}"
+    poster="$root/posters/${rel%.*}.jpg"
+    [ -f "$poster" ] && continue
+    mkdir -p "$(dirname "$poster")"
+    # One second in is where a recording has usually settled; a very short one
+    # has no frame there at all, so fall back to its first.
+    if ffmpeg -loglevel error -y -ss 1 -i "$video" -frames:v 1 -vf "scale=640:-2" "$poster" 2>/dev/null \
+      || ffmpeg -loglevel error -y -i "$video" -frames:v 1 -vf "scale=640:-2" "$poster" 2>/dev/null; then
+      files+=("$poster")
+      log "poster for ${rel}"
+    else
+      rm -f "$poster"
+    fi
+  done < <(find "$root" -type f \( -name '*.mp4' -o -name '*.webm' -o -name '*.mov' \) -print0)
+fi
 
 # The prefix names the repository as well as the pull request: one bucket holds
 # evidence from every repository, and PR numbers collide across them.
@@ -195,11 +255,28 @@ done
 # --- render the report -------------------------------------------------------
 
 rendered="${RUNNER_TEMP:-/tmp}/qa-evidence-rendered.md"
-is_capture() {
-  case "${1##*.}" in
-    png|jpg|jpeg|gif|webp|svg|mp4|webm|mov) return 0 ;;
-    *) return 1 ;;
-  esac
+
+# A recording is evidence, but a bare mp4 link is not something a reviewer can
+# look at. Everything else that is embeddable is embedded; the rest is a link.
+render_file() {
+  local rel="$1" url="$2" poster
+  if is_image "$rel"; then
+    printf '![%s](%s)' "$rel" "$url"
+  elif is_video "$rel" && poster="$(poster_url_for "$rel")"; then
+    printf '[![%s](%s)](%s)' "$rel" "$poster" "$url"
+  elif is_video "$rel"; then
+    printf '[▶ %s](%s)' "$rel" "$url"
+  else
+    printf '[%s](%s)' "$rel" "$url"
+  fi
+}
+
+poster_url_for() {
+  local rel="$1" key="posters/${1%.*}.jpg" k u
+  while IFS=$'\t' read -r k u; do
+    if [ "$k" = "$key" ]; then printf '%s' "$u"; return 0; fi
+  done < "$mapping"
+  return 1
 }
 
 if [ -n "$report_path" ]; then
@@ -242,9 +319,10 @@ elif [ -s "$mapping" ]; then
     echo
     while IFS=$'\t' read -r rel url; do
       [ -n "$rel" ] || continue
+      case "$rel" in posters/*) continue ;; esac
       echo "**\`${rel}\`**"
       echo
-      if is_capture "$rel"; then echo "![${rel}](${url})"; else echo "[${rel}](${url})"; fi
+      render_file "$rel" "$url"
       echo
     done < "$mapping"
   } > "$rendered"
@@ -268,7 +346,8 @@ if [ -s "$mapping" ] && [ -s "$rendered" ] && ! grep -q '!\[' "$rendered"; then
   while IFS=$'\t' read -r rel url; do
     [ -n "$rel" ] || continue
     [ "$rel" = "${REPORT:-}" ] && continue
-    is_capture "$rel" && uncited+=("$rel" "$url")
+    case "$rel" in posters/*) continue ;; esac
+    if is_image "$rel" || is_video "$rel"; then uncited+=("$rel" "$url"); fi
   done < "$mapping"
 
   if [ ${#uncited[@]} -gt 0 ]; then
@@ -277,13 +356,15 @@ if [ -s "$mapping" ] && [ -s "$rendered" ] && ! grep -q '!\[' "$rendered"; then
       echo "<details><summary>Captures from this run, not cited by the report</summary>"
       echo
       echo "> The report does not embed these, so they are not an argument about"
-      echo "> the change. They are what the run photographed."
+      echo "> the change. They are what the run looked at."
       echo
       echo "| capture | |"
       echo "|---|---|"
       i=0
       while [ "$i" -lt ${#uncited[@]} ]; do
-        echo "| \`${uncited[$i]}\` | ![${uncited[$i]}](${uncited[$((i + 1))]}) |"
+        rel="${uncited[$i]}"
+        url="${uncited[$((i + 1))]}"
+        printf '| `%s` | %s |\n' "$rel" "$(render_file "$rel" "$url")"
         i=$((i + 2))
       done
       echo
@@ -320,44 +401,6 @@ if [ "$POST_COMMENT" = "true" ] && [ "$DRY_RUN" != "true" ]; then
       log "posted a new evidence comment"
       summary "Posted the evidence on #${PR}."
     fi
-  fi
-fi
-
-# --- show what the report did not --------------------------------------------
-#
-# The agent posts its findings as prose, and prose about a before/after change
-# usually ends up without a single image even when the captures exist. An
-# evidence comment with no images is a claim, not a look. Anything the run
-# captured and the report did not cite is appended, collapsed, and labelled as
-# uncited -- so the reviewer sees it without it being passed off as the report.
-
-if [ -s "$mapping" ] && [ -s "$rendered" ] && ! grep -q '!\[' "$rendered"; then
-  uncited=()
-  while IFS=$'\t' read -r rel url; do
-    [ -n "$rel" ] || continue
-    [ "$rel" = "${REPORT:-}" ] && continue
-    is_capture "$rel" && uncited+=("$rel" "$url")
-  done < "$mapping"
-
-  if [ ${#uncited[@]} -gt 0 ]; then
-    {
-      echo
-      echo "<details><summary>Captures from this run, not cited by the report</summary>"
-      echo
-      echo "> The report does not embed these, so they are not an argument about"
-      echo "> the change. They are what the run photographed."
-      echo
-      echo "| capture | |"
-      echo "|---|---|"
-      i=0
-      while [ "$i" -lt ${#uncited[@]} ]; do
-        echo "| \`${uncited[$i]}\` | ![${uncited[$i]}](${uncited[$((i + 1))]}) |"
-        i=$((i + 2))
-      done
-      echo
-      echo "</details>"
-    } >> "$rendered"
-    log "appended $(( ${#uncited[@]} / 2 )) uncited capture(s) as a collapsed gallery"
   fi
 fi
 

@@ -140,9 +140,15 @@ jobs:
 
           # `--diff-filter=M`: adding a verifier file is how it gets there;
           # modifying one that already exists on the base branch is the problem.
+          #
+          # `fixtures/qa` is in the list because that is where a repository keeps
+          # the seed that decides what the agent signs in to and what it finds.
+          # It is not the product, but it does decide the judgement, so a change
+          # to it belongs to the verifier -- and a change to it *and* to the
+          # product is a change that arranged its own verdict.
           touched="$(git diff --diff-filter=M --name-only "$BASE_SHA" "$HEAD_SHA" -- \
             "$CONFIG_PATH" "$COMPOSE_PATH" .github/workflows/verify.yml \
-            .github/verify .github/qa 2>/dev/null || true)"
+            .github/verify .github/qa fixtures/qa 2>/dev/null || true)"
           if [ -z "$touched" ]; then
             exit 0
           fi

@@ -52,6 +52,7 @@ answer, who can sign in, and how to start them.
 | Publish the image built from the change, and pass its ref in | ✔ | | |
 | Name the baseline image in `qa.yml`, as `{base_sha}` | ✔ | | |
 | `compose.verify.yaml`: services, dependencies, healthchecks, a `seed` service in the `seed` profile | ✔ | | |
+| `fixtures/qa`: the seed that decides what the agent signs in to | ✔ | | |
 | Declare `urls` and `accounts`, plus an optional `focus:` | ✔ | | |
 | Budget, iterations and timeout, capped by Common | ✔ | | |
 | `concurrency`, base and head checkouts | | | ✔ |
@@ -107,7 +108,11 @@ jobs:
 ```
 
 **`.github/qa.yml`** -- the contract. Read from the base branch, never from the
-pull request, so a change cannot describe itself as needing less verification:
+pull request, so a change cannot describe itself as needing less verification.
+Every verifier file is read that way, including the seed in `fixtures/qa`: mount
+it from the checkout into the `seed` service (`./fixtures/qa:/qa-fixtures:ro`)
+rather than running the copy that happens to be inside the image under test,
+because a change that can edit its own fixture is judging itself.
 
 ```yaml
 product-paths: '^(src/|vite\.|Dockerfile$|package-lock\.json$)'

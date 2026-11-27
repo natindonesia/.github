@@ -241,6 +241,10 @@ jobs:
         id: agent
         if: steps.scope.outputs.applies == 'true' && inputs.dry-run == false && env.QA_AGENT_KEY != ''
         uses: natindonesia/.github/actions/qa-agent@v1
+        # On the step, not inside the composite action: a composite action's steps
+        # reject `timeout-minutes`, and the runner refuses to load the action at
+        # all when one is written there.
+        timeout-minutes: ${{ fromJSON(steps.config.outputs.agent-timeout) }}
         with:
           urls: ${{ steps.config.outputs.urls }}
           accounts: ${{ steps.config.outputs.accounts }}
@@ -250,7 +254,6 @@ jobs:
           model: ${{ inputs.model }}
           max-budget: ${{ steps.config.outputs.max-budget }}
           max-iterations: ${{ steps.config.outputs.max-iterations }}
-          timeout-minutes: ${{ steps.config.outputs.agent-timeout }}
         env:
           LLM_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

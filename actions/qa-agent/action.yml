@@ -40,18 +40,15 @@ inputs:
     description: Ceiling on iterations.
     required: false
     default: "60"
-  timeout-minutes:
-    description: Ceiling on wall clock. Longer only means "allowed to flail longer".
-    required: false
-    default: "18"
-
 runs:
   using: composite
   steps:
     - name: Run the agent
       id: run
       shell: bash
-      timeout-minutes: ${{ fromJSON(inputs.timeout-minutes) }}
+      # No `timeout-minutes` here: a composite step does not accept it, and the
+      # runner rejects the whole action when it is present. The ceiling belongs on
+      # the step that calls this action, in qa-verify.yml.
       env:
         LLM_MODEL: ${{ inputs.model }}
         MAX_BUDGET: ${{ inputs.max-budget }}

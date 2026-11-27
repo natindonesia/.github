@@ -372,6 +372,96 @@ def probe(url: str, timeout_seconds: int = 180) -> tuple[bool, str]:
     return False, last
 
 
+def service_states(args: argparse.Namespace) -> dict[str, dict[str, str]]:
+    """Every container in the project, by service name, as compose reports it."""
+    listing = compose(args, ["ps", "--all", "--format", "json"], [], capture=True)
+    if listing.returncode != 0:
+        return {}
+    text = listing.stdout.strip()
+    if not text:
+        return {}
+    records: list[dict[str, str]] = []
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        # Older compose prints one object per line rather than an array.
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    else:
+        records = parsed if isinstance(parsed, list) else [parsed]
+    states: dict[str, dict[str, str]] = {}
+    for record in records:
+        service = record.get("Service") or record.get("service") or ""
+        if service:
+            states[service] = record
+    return states
+
+
+def describe(record: dict[str, str]) -> str:
+    state = (record.get("State") or record.get("state") or "?").lower()
+    health = (record.get("Health") or record.get("health") or "").lower()
+    return f"{state}/{health}" if health else state
+
+
+def wait_ready(args: argparse.Namespace, timeout: int = 600) -> list[str]:
+    """Wait for the product, without letting a missing healthcheck fail the run.
+
+    `up --detach --wait` is not used on purpose: compose treats a service that
+    declares no healthcheck as a failure, and `before` declares none. If the
+    baseline cannot start -- an nginx template it no longer matches, an image that
+    exits -- the run should degrade to single mode, not lose the change's verdict.
+    So everything except `before` has to reach running, and healthy where it has a
+    healthcheck; `before` is only observed here and probed afterwards.
+    """
+    deadline = time.time() + timeout
+    last = ""
+    states: dict[str, dict[str, str]] = {}
+    while True:
+        states = service_states(args)
+        if states:
+            ready = True
+            problems: list[str] = []
+            for service, record in states.items():
+                if service in ("before", "seed"):
+                    continue
+                state = (record.get("State") or "").lower()
+                health = (record.get("Health") or "").lower()
+                if state == "running" and health in ("", "healthy"):
+                    continue
+                if state in ("exited", "dead"):
+                    problems.append(f"{service} is {state}")
+                else:
+                    ready = False
+                    last = f"{service} is {describe(record)}"
+            if problems:
+                fail("the product did not stay up: " + "; ".join(problems))
+            if ready:
+                break
+        if time.time() > deadline:
+            fail(
+                f"the product was still not ready after {timeout}s: "
+                f"{last or 'no container reported a state'}"
+            )
+        time.sleep(2)
+
+    notes: list[str] = []
+    before = states.get("before")
+    if before is not None:
+        state = (before.get("State") or "").lower()
+        if state != "running":
+            notes.append(
+                f"the baseline container is {describe(before)}, so there is no "
+                "before/after comparison"
+            )
+    return notes
+
+
 def cmd_up(args: argparse.Namespace) -> int:
     base_sha = os.getenv("BASE_SHA", "")
     head_sha = os.getenv("HEAD_SHA", "")
@@ -434,9 +524,14 @@ def cmd_up(args: argparse.Namespace) -> int:
         if seeded.returncode != 0:
             fail(f"the seed service failed (exit {seeded.returncode})")
 
-    up = compose(args, ["up", "--detach", "--wait", "--wait-timeout", "600"], profiles)
+    up = compose(args, ["up", "--detach"], profiles)
     if up.returncode != 0:
         fail(f"docker compose could not start the product (exit {up.returncode})")
+
+    # Waited for here rather than by `--wait`, which fails the run for a service
+    # that declares no healthcheck -- exactly what a baseline that must be
+    # allowed to fail looks like.
+    notes.extend(wait_ready(args))
 
     probed: dict[str, str] = {}
     for name in ("after", "before"):

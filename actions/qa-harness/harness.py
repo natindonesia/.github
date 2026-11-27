@@ -46,9 +46,12 @@ import yaml
 REGISTRY_ALLOWLIST = "ghcr.io/natindonesia"
 
 DEFAULTS: dict[str, Any] = {
-    "max-budget": 0.75,
-    "max-iterations": 60,
-    "agent-timeout": 18,
+    "max-budget": 0.95,
+    # A run against a real product spends a step per click, per screenshot and
+    # per captured response. 60 was the inline gate's number and it stopped a run
+    # mid-report, with the stack healthy and the evidence already gathered.
+    "max-iterations": 120,
+    "agent-timeout": 30,
 }
 
 REQUIRED_URIS = ("after",)

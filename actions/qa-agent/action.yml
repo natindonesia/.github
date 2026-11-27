@@ -35,11 +35,11 @@ inputs:
   max-budget:
     description: Ceiling on spend, in dollars.
     required: false
-    default: "0.75"
+    default: "0.95"
   max-iterations:
     description: Ceiling on iterations.
     required: false
-    default: "60"
+    default: "120"
 runs:
   using: composite
   steps:

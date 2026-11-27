@@ -86,7 +86,7 @@ def build_prompt() -> str:
     focus = env("QA_FOCUS")
     evidence = env("QA_OUT")
     report_name = REPORT_NAME
-    budget = env("MAX_ITERATIONS", "60")
+    budget = env("MAX_ITERATIONS", "120")
 
     # The template travels with the agent so the agreed path is a file it can
     # copy and fill, not a shape it has to infer from prose.
@@ -172,7 +172,8 @@ verified nothing, however much it saw. So:
    anything: the heading `## QA Report: PARTIAL` and one line saying what you are
    about to check. Return to it every few steps and fill it in, verdict last. A
    partial report that exists is worth more than a complete one that never got
-   written.
+   written. **Never delete it and start over** -- rewrite it in place. The steps
+   end without warning, and the file is the only thing published.
 2. Read the discussion and the shape of the diff, and write the goal of the change
    in one sentence. Do not read the changed source line by line: the product is
    the subject, and the diff is only enough context to know where to look.
@@ -250,8 +251,8 @@ def main() -> int:
         return 0
 
     model = env("LLM_MODEL", "openrouter/deepseek/deepseek-v4.1-flash-1017")
-    max_budget = float(env("MAX_BUDGET", "0.75"))
-    max_iterations = int(env("MAX_ITERATIONS", "60"))
+    max_budget = float(env("MAX_BUDGET", "0.95"))
+    max_iterations = int(env("MAX_ITERATIONS", "120"))
     workspace = Path(env("QA_RUNTIME", os.getcwd()))
     workspace.mkdir(parents=True, exist_ok=True)
     os.chdir(workspace)
@@ -288,6 +289,15 @@ def main() -> int:
     holder.append(conversation)
 
     logger.info("model=%s budget=$%.2f iterations=%d", model, max_budget, max_iterations)
+
+    # A rerun reuses the workspace, so a report written by the previous attempt
+    # is still there. Publishing it would report that attempt's work under this
+    # run's evidence, so it goes before the agent starts looking.
+    stale = Path(env("QA_OUT", ".")) / REPORT_NAME
+    if stale.exists():
+        stale.unlink()
+        print("::notice title=Report::removed the report left by an earlier attempt")
+
     conversation.send_message(build_prompt())
 
     status = 0
@@ -295,7 +305,12 @@ def main() -> int:
         conversation.run()
     except BudgetExceeded as error:
         print(f"::warning title=Budget::the agent stopped early: {error}")
-        status = 0
+    except Exception as error:  # noqa: BLE001 -- a stopped run still has a report to write
+        # Running out of steps is the common case, and it arrives as an exception
+        # from the conversation rather than as a return value. Whatever the agent
+        # already saw is in its final message, so the fallback below still runs;
+        # the verdict step is what fails when there is nothing to publish.
+        print(f"::warning title=QA agent::the run stopped early: {error}")
 
     metrics = conversation.conversation_stats.get_combined_metrics()
     print(f"\n=== QA agent cost: ${metrics.accumulated_cost:.4f} ===")

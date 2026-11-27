@@ -188,7 +188,7 @@ jobs:
               echo
               echo "This change touches nothing the product serves:"
               echo
-              printf '%s\n' "$changed" | sed 's/^/- `/;s/$/`/'
+              printf '%s\n' "$changed" | while IFS= read -r name; do printf -- "- \`%s\`\n" "$name"; done
             } >> "$GITHUB_STEP_SUMMARY"
             echo "no product files changed; skipping the product and the agent"
             exit 0
@@ -198,7 +198,7 @@ jobs:
           {
             echo "### Product files changed"
             echo
-            printf '%s\n' "$affected" | sed 's/^/- `/;s/$/`/'
+            printf '%s\n' "$affected" | while IFS= read -r name; do printf -- "- \`%s\`\n" "$name"; done
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install the verification toolchain
@@ -266,7 +266,10 @@ jobs:
               \( -name '*.png' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.gif' -o -name '*.webp' \
               -o -name '*.mp4' -o -name '*.webm' -o -name '*.pdf' -o -name '*.json' -o -name '*.har' \
               -o -name '*.md' -o -name '*.log' -o -name '*.txt' -o -name '*.zip' \) \
-              -exec cp -n {} "$QA_OUT"/\;
+              -print0 |
+              while IFS= read -r -d '' found; do
+                cp -n "$found" "$QA_OUT"/
+              done
           done
           ls -la "$QA_OUT" || true
 

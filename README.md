@@ -221,6 +221,23 @@ reads, in the evidence, and in the step summary. It does not fail, because a
 missing baseline is a fact about the repository's build history, not a verdict
 about the change.
 
+Give `before` no healthcheck:
+
+```yaml
+  before:
+    image: ${BEFORE_IMAGE:?set by the pipeline}
+    profiles: [before]
+    healthcheck:
+      disable: true
+```
+
+The harness starts the project detached and polls it, so everything else has to
+reach running and healthy; `before` is only observed, and the probe that follows
+decides whether there is a comparison. `compose up --wait` cannot be used for
+this: it fails the whole run for a service that declares no healthcheck, and it
+fails for a container that exits -- which is exactly the baseline that is
+supposed to degrade quietly.
+
 What the change is compared to must be the change: an `after` image carrying a
 revision label that disagrees with the head commit is refused, and so is an
 `after` that resolves to the same image as its `before`.

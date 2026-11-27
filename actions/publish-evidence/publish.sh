@@ -254,7 +254,10 @@ done
 
 # --- render the report -------------------------------------------------------
 
-rendered="${RUNNER_TEMP:-/tmp}/qa-evidence-rendered.md"
+# Unique per invocation, not per job: the self-test publishes three different
+# fixtures in one job, and a fixed name means the last one silently replaces the
+# rendered report the previous assertion is about to read.
+rendered="${RUNNER_TEMP:-/tmp}/qa-evidence-rendered-$$.md"
 
 # A recording is evidence, but a bare mp4 link is not something a reviewer can
 # look at. Everything else that is embeddable is embedded; the rest is a link.

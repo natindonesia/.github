@@ -106,24 +106,24 @@ jobs:
           grep -qE "\]\\(${base}[^)]*login-spec\.pdf\\)" "$REPORT"
           grep -qE "\]\\(${base}[^)]*traces/run\.har\\)" "$REPORT"
 
-      - name: Publish again, this time saying why there is no report
+      - name: Publish again, this time with no report at all
         id: skipped
         uses: ./actions/publish-evidence
         with:
           pr-number: "1"
           evidence-dir: fixtures/output
           report: nowhere.md
-          skip-note: No product files changed, so no agent was run.
           dry-run: "true"
           post-comment: "false"
 
-      - name: Assert the skip note is rendered instead of the warning
-        env:
-          REPORT: ${{ steps.skipped.outputs.rendered-report }}
+      - name: Assert that published nothing
         run: |
           set -euo pipefail
-          grep -q 'No product files changed, so no agent was run.' "$REPORT"
-          ! grep -q 'uncontextualised' "$REPORT"
+          # No report means no evidence was produced. Posting the captures anyway
+          # would dress up a run that proved nothing as one that did, and the
+          # verdict is what has to carry that.
+          test "${{ steps.skipped.outputs.uploaded }}" = "0"
+          test ! -s "${{ steps.skipped.outputs.rendered-report }}"
 
       - name: Assert a run that captured nothing is not a failure to publish
         id: empty
@@ -185,89 +185,59 @@ jobs:
           expect no-report   '' false
           expect not-applicable '' true
 
-      - name: Assert a report that embeds nothing still shows the captures
+      - name: Assert only what the report refers to is uploaded
         run: |
           set -euo pipefail
-          rm -rf fixtures/plain /tmp/gallery.out && mkdir -p fixtures/plain/output
-          printf '\x89PNG\r\n\x1a\n' > fixtures/plain/output/before-home.png
-          printf '\x89PNG\r\n\x1a\n' > fixtures/plain/output/after-home.png
-          ffmpeg -loglevel error -y -f lavfi -i testsrc=duration=1:size=320x240:rate=10 \
-            -pix_fmt yuv420p fixtures/plain/output/after-flow.mp4
-          printf '## QA Report: PASS\n\nProse only.\n' > fixtures/plain/output/qa-report.md
-
-          GITHUB_WORKSPACE="$PWD/fixtures/plain" GITHUB_REPOSITORY=natindonesia/selftest \
-            PR_NUMBER=1 GITHUB_RUN_ID=1 BUCKET=b ENDPOINT=e PUBLIC_BASE=https://example.com \
-            AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x DRY_RUN=true POST_COMMENT=false \
-            GITHUB_OUTPUT=/tmp/gallery.out EVIDENCE_DIR=output REPORT=qa-report.md \
-            bash actions/publish-evidence/publish.sh > /dev/null 2>&1
-
-          rendered="$(sed -n 's/^rendered-report=//p' /tmp/gallery.out)"
-
-          # A report with no images, and captures on disk, must still show them:
-          # a comment full of measurements and no images is a claim, not a look.
-          grep -q 'Captures from this run, not cited' "$rendered" \
-            || { echo "::error::a report with no images published no gallery"; exit 1; }
-          grep -q '!\[after-home.png\]' "$rendered" \
-            || { echo "::error::the gallery did not embed the capture"; exit 1; }
-
-      - name: Assert a capture the report links is not repeated in the gallery
-        run: |
-          set -euo pipefail
-          # The report can cite a capture as a link or as an embed. The gallery
-          # is for what the report ignored, so a link has to count as a
-          # citation: the first real run published every screenshot twice.
-          rm -rf fixtures/linked /tmp/linked.out && mkdir -p fixtures/linked/output
-          printf '\x89PNG\r\n\x1a\n' > fixtures/linked/output/before-home.png
-          printf '\x89PNG\r\n\x1a\n' > fixtures/linked/output/ignored.png
+          # A capture the report never mentions stays in the artifact: publishing
+          # it puts pictures in the comment that the report does not stand behind.
+          rm -rf fixtures/refs /tmp/refs.out && mkdir -p fixtures/refs/output
+          printf '\x89PNG\r\n\x1a\n' > fixtures/refs/output/before-home.png
+          printf '\x89PNG\r\n\x1a\n' > fixtures/refs/output/after-home.png
+          printf '\x89PNG\r\n\x1a\n' > fixtures/refs/output/never-mentioned.png
           printf '## QA Report: PASS\n\nSee [the home page](./before-home.png).\n' \
-            > fixtures/linked/output/qa-report.md
+            > fixtures/refs/output/qa-report.md
 
-          GITHUB_WORKSPACE="$PWD/fixtures/linked" GITHUB_REPOSITORY=natindonesia/selftest \
+          GITHUB_WORKSPACE="$PWD/fixtures/refs" GITHUB_REPOSITORY=natindonesia/selftest \
             PR_NUMBER=1 GITHUB_RUN_ID=1 BUCKET=b ENDPOINT=e PUBLIC_BASE=https://example.com \
             AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x DRY_RUN=true POST_COMMENT=false \
-            GITHUB_OUTPUT=/tmp/linked.out EVIDENCE_DIR=output REPORT=qa-report.md \
+            GITHUB_OUTPUT=/tmp/refs.out EVIDENCE_DIR=output REPORT=qa-report.md \
+            bash actions/publish-evidence/publish.sh > /tmp/refs.log 2>&1
+
+          uploaded="$(sed -n 's/^uploaded=//p' /tmp/refs.out)"
+          # The one file it names. Not the report itself, which is the artifact's
+          # job, and not the third screenshot, which it never mentions.
+          if [ "$uploaded" != "1" ]; then
+            echo "::error::uploaded $uploaded object(s), expected 1 (the file it names)"
+            sed -n '1,40p' /tmp/refs.log
+            exit 1
+          fi
+          grep -q 'never-mentioned.png' /tmp/refs.log \
+            && { echo "::error::a capture the report never mentions was published"; exit 1; }
+          ! grep -q 'never-mentioned.png' /tmp/refs.log
+
+      - name: Assert a referenced recording becomes its animation
+        run: |
+          set -euo pipefail
+          rm -rf fixtures/motion /tmp/motion.out && mkdir -p fixtures/motion/output
+          ffmpeg -loglevel error -y -f lavfi -i testsrc=duration=1:size=320x240:rate=10 \
+            -pix_fmt yuv420p fixtures/motion/output/after-flow.mp4
+          printf '## QA Report: PASS\n\n| # | evidence |\n|---|---|\n| 1 | [recording](./after-flow.mp4) |\n' \
+            > fixtures/motion/output/qa-report.md
+
+          GITHUB_WORKSPACE="$PWD/fixtures/motion" GITHUB_REPOSITORY=natindonesia/selftest \
+            PR_NUMBER=1 GITHUB_RUN_ID=1 BUCKET=b ENDPOINT=e PUBLIC_BASE=https://example.com \
+            AWS_ACCESS_KEY_ID=x AWS_SECRET_ACCESS_KEY=x DRY_RUN=true POST_COMMENT=false \
+            GITHUB_OUTPUT=/tmp/motion.out EVIDENCE_DIR=output REPORT=qa-report.md \
             bash actions/publish-evidence/publish.sh > /dev/null 2>&1
 
-          rendered="$(sed -n 's/^rendered-report=//p' /tmp/linked.out)"
-          gallery="$(sed -n '/Captures from this run, not cited/,$p' "$rendered")"
-
-          printf '%s' "$gallery" | grep -q 'ignored.png' \
-            || { echo "::error::the uncited capture was not shown"; exit 1; }
-          if printf '%s' "$gallery" | grep -q 'before-home.png'; then
-            echo "::error::a capture the report linked was repeated in the gallery"
-            exit 1
-          fi
-
-      - name: Assert the gallery is appended once, not twice
-        run: |
-          set -euo pipefail
-          # The block used to be copied: the first copy landed before the comment
-          # was posted and the second after it, so a video-less run published a
-          # gallery nobody had seen and a re-run published two.
-          rendered="$(sed -n 's/^rendered-report=//p' /tmp/gallery.out)"
-          occurrences="$(grep -c '<details><summary>Captures from this run' "$rendered" || true)"
-          if [ "$occurrences" -ne 1 ]; then
-            echo "::error::the uncited gallery appears $occurrences time(s), expected 1"
-            exit 1
-          fi
-
-      - name: Assert a recording is shown as motion, with the recording linked
-        run: |
-          set -euo pipefail
-          rendered="$(sed -n 's/^rendered-report=//p' /tmp/gallery.out)"
-          # A bare mp4 link is not something a reviewer can look at: GitHub will
-          # not play one inline, and its image proxy refuses the file. The
-          # animated AVIF is what makes the recording visible; the link under it
-          # is what makes it playable.
-          grep -q 'motion/after-flow.avif' "$rendered" \
-            || { echo "::error::the recording was published without an inline copy"; exit 1; }
-          grep -qE '!\[after-flow\.mp4\]\([^)]*motion/after-flow\.avif\)' "$rendered" \
-            || { echo "::error::the recording is not embedded as an animation"; exit 1; }
-          grep -qE '\[after-flow\.mp4\]\([^)]*after-flow\.mp4\)' "$rendered" \
-            || { echo "::error::the recording itself is not linked beside the animation"; exit 1; }
+          rendered="$(sed -n 's/^rendered-report=//p' /tmp/motion.out)"
+          # One element where the link was: the animation as the picture, the
+          # recording as what it opens.
+          grep -qE '\[!\[recording\]\([^)]*motion/after-flow\.avif\)\]\([^)]*after-flow\.mp4\)' "$rendered" \
+            || { echo "::error::the recording was not replaced by its animation"; exit 1; }
           # moov is the track box: without it the file is a still, and the gate
           # would be publishing a frozen frame it believes is motion.
-          grep -aq moov fixtures/plain/output/motion/after-flow.avif \
+          grep -aq moov fixtures/motion/output/motion/after-flow.avif \
             || { echo "::error::the inline copy is not animated"; exit 1; }
 
   workflow:

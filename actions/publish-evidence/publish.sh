@@ -19,7 +19,6 @@ ENDPOINT="${ENDPOINT:?ENDPOINT is required}"
 PUBLIC_BASE="${PUBLIC_BASE:?PUBLIC_BASE is required}"
 POST_COMMENT="${POST_COMMENT:-true}"
 COMMENT_MARKER="${COMMENT_MARKER:-<!-- qa-evidence -->}"
-HEAD_SHA="${HEAD_SHA:-}"
 DRY_RUN="${DRY_RUN:-false}"
 MAX_BYTES="${MAX_BYTES:-10485760}"
 # Recordings are the one artefact that is routinely bigger than a screenshot and
@@ -92,62 +91,51 @@ if [ -n "$REPORT" ] && [ "$root_missing" = false ]; then
   [ -f "$report_path" ] || report_path=""
 fi
 
-# --- recover a report that arrived as a review -------------------------------
+# --- what the report refers to -----------------------------------------------
 #
-# The QA agent posts its findings as a pull request review, not as a file, so a
-# complete run can leave the evidence directory empty and still hold a verdict.
-# The listing below would then be the only trace of it. The newest review bound
-# to the commit under test is the report.
-recovered_review=false
-if [ -z "$report_path" ] && [ -n "$HEAD_SHA" ] && [ -z "${SKIP_NOTE:-}" ]; then
-  review_body="${RUNNER_TEMP:-/tmp}/qa-review-body.md"
-  if gh api "repos/${REPO}/pulls/${PR}/reviews?per_page=100" \
-       --jq "[.[] | select(.commit_id == \"${HEAD_SHA}\" and ((.body // \"\") | length > 0))] | last | .body // \"\"" \
-       > "$review_body" 2>/dev/null \
-     && [ -n "$(tr -d '[:space:]' < "$review_body" 2>/dev/null || true)" ]; then
-    report_path="$review_body"
-    recovered_review=true
-    log "recovered the report from the agent's review on ${HEAD_SHA:0:12}"
-  else
-    log "no review bound to ${HEAD_SHA:0:12}; falling back to the file listing"
-  fi
-fi
+# Only what `qa-report.md` names is published. A capture the agent took and never
+# mentioned stays in the artifact: uploading it would put pictures in the
+# comment that the report does not stand behind, and the report is what the
+# verdict is about. No report is no publication -- a run that produced no
+# evidence must not be dressed up as one, and the verdict says `no-report`.
 
-if [ "$root_missing" = true ] && [ -z "$report_path" ]; then
-  warning "no evidence directory at $root, so nothing could be published"
+if [ -z "$report_path" ]; then
+  warning "no ${EVIDENCE_DIR} report at ${root}/${REPORT:-qa-report.md}, so nothing was published"
   summary "### Evidence"
   summary ""
-  summary "The run left no \`$EVIDENCE_DIR\` directory, so there was nothing to collect."
+  summary "The run produced no report, so there was nothing to publish."
   echo "uploaded=0" >> "${GITHUB_OUTPUT:-/dev/null}"
   exit 0
 fi
+
+# Every file in the directory is a candidate, so a link written as `./x.mp4`,
+# `output/x.mp4` or a bare `x.mp4` resolves to the same object; the report decides
+# which of them are published. A reference to a file that is not there stays
+# unresolved here and fails at the rewrite, which is where it belongs.
+refmap="$(mktemp)"
+find "$root" -type f -not -name '.*' -printf '%P\t%P\n' | sort > "$refmap"
+mapfile -t referenced < <(
+  REPORT_PATH="$report_path" MAPPING="$refmap" EVIDENCE_ROOT="$root" RENDERED=/dev/null \
+    python3 "$(dirname "$0")/render.py" --refs 2>/dev/null || true
+)
+rm -f "$refmap"
+log "the report refers to ${#referenced[@]} file(s)"
 
 files=()
-if [ "$root_missing" = false ]; then
-  while IFS= read -r -d '' file; do
-    case "${file##*.}" in
-      mp4|webm|mov) cap="$MAX_VIDEO_BYTES" ;;
-      *)            cap="$MAX_BYTES" ;;
-    esac
-    size="$(stat -c %s "$file" 2>/dev/null || echo 0)"
-    if [ "$size" -ge "$cap" ]; then
-      rel="${file#"$root"/}"
-      printf '::warning title=Evidence file skipped::%s is %sMB, over the %s byte cap for its type\n' \
-        "$rel" "$((size / 1048576))" "$cap"
-      continue
-    fi
-    files+=("$file")
-  done < <(find "$root" -type f -not -name '.*' -print0 | sort -z)
-fi
-
-if [ ${#files[@]} -eq 0 ] && [ -z "$report_path" ]; then
-  log "No evidence files in $root."
-  summary "### Evidence"
-  summary ""
-  summary "The run produced no files in \`$EVIDENCE_DIR\`, so nothing is shown here."
-  echo "uploaded=0" >> "${GITHUB_OUTPUT:-/dev/null}"
-  exit 0
-fi
+for rel in "${referenced[@]}"; do
+  [ -f "$root/$rel" ] || continue
+  case "$rel" in
+    *.mp4|*.webm|*.mov) cap="$MAX_VIDEO_BYTES" ;;
+    *)                  cap="$MAX_BYTES" ;;
+  esac
+  size="$(stat -c %s "$root/$rel" 2>/dev/null || echo 0)"
+  if [ "$size" -ge "$cap" ]; then
+    printf '::warning title=Evidence file skipped::%s is %sMB, over the %s byte cap for its type\n' \
+      "$rel" "$((size / 1048576))" "$cap"
+    continue
+  fi
+  files+=("$root/$rel")
+done
 
 # --- upload ------------------------------------------------------------------
 
@@ -233,26 +221,7 @@ is_video() {
 # is. With no report there is only the listing, which shows every capture, so
 # every recording is encoded.
 
-declare -A wanted=()
-encode_all_motion=false
-if [ -n "$report_path" ]; then
-  refmap="$(mktemp)"
-  for file in "${files[@]}"; do
-    printf '%s\t%s\n' "${file#"$root"/}" "${file#"$root"/}" >> "$refmap"
-  done
-  while IFS= read -r ref; do
-    [ -n "$ref" ] && wanted["$ref"]=1
-  done < <(
-    REPORT_PATH="$report_path" MAPPING="$refmap" EVIDENCE_ROOT="$root" \
-      RENDERED=/dev/null python3 "$(dirname "$0")/render.py" --video-refs 2>/dev/null || true
-  )
-  rm -f "$refmap"
-  log "the report refers to ${#wanted[@]} recording(s)"
-else
-  encode_all_motion=true
-fi
-
-if [ "$root_missing" = false ] && command -v ffmpeg >/dev/null 2>&1; then
+if command -v ffmpeg >/dev/null 2>&1; then
   # One encode attempt. The filter decides the size; the caller decides whether
   # the result was small enough.
   encode_motion() {
@@ -263,15 +232,9 @@ if [ "$root_missing" = false ] && command -v ffmpeg >/dev/null 2>&1; then
       </dev/null >/dev/null 2>&1
   }
 
-  # The list is materialised first: a child that reads stdin would otherwise eat
-  # bytes from the find stream, and the *next* path arrives truncated -- which
-  # the poster version of this loop did silently.
-  mapfile -d '' -t videos < <(
-    find "$root" -type f \( -name '*.mp4' -o -name '*.webm' -o -name '*.mov' \) -print0
-  )
-  for video in "${videos[@]}"; do
+  for video in "${files[@]}"; do
+    is_video "$video" || continue
     rel="${video#"$root"/}"
-    if [ "$encode_all_motion" != true ] && [ -z "${wanted[$rel]:-}" ]; then continue; fi
     motion="$root/motion/${rel%.*}.avif"
     if [ ! -f "$motion" ]; then
       mkdir -p "$(dirname "$motion")"
@@ -350,127 +313,18 @@ done
 # rendered report the previous assertion is about to read.
 rendered="${RUNNER_TEMP:-/tmp}/qa-evidence-rendered-$$.md"
 
-# A recording is evidence, and a bare mp4 link is not something a reviewer can
-# look at. Where the inline copy exists, the animation is shown and the
-# recording is linked under it, so the detail is still one click away.
-render_file() {
-  local rel="$1" url="$2" motion
-  if is_image "$rel"; then
-    printf '![%s](%s)' "$rel" "$url"
-  elif is_video "$rel" && motion="$(motion_url_for "$rel")"; then
-    printf '![%s](%s) [%s](%s)' "$rel" "$motion" "$rel" "$url"
-  elif is_video "$rel"; then
-    printf '[▶ %s](%s)' "$rel" "$url"
-  else
-    printf '[%s](%s)' "$rel" "$url"
-  fi
-}
-
-motion_url_for() {
-  local rel="$1" key="motion/${1%.*}.avif" k u
-  while IFS=$'\t' read -r k u; do
-    if [ "$k" = "$key" ]; then printf '%s' "$u"; return 0; fi
-  done < "$mapping"
-  return 1
-}
-
-if [ -n "$report_path" ]; then
-  if [ -s "$mapping" ]; then
-    if [ "$recovered_review" = true ]; then
-      # A review may quote files this run never captured, because the review is
-      # prose about the change rather than a manifest of this run's captures.
-      # Being wrong about a link there is not a reason to publish nothing -- but
-      # a *written* report that points at a capture it did not produce is a hole
-      # in the evidence, and must still fail.
-      if ! REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
-        python3 "$(dirname "$0")/render.py"; then
-        cp "$report_path" "$rendered"
-        log "could not repoint every link; posting the recovered review as written"
-      fi
-    else
-      REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
-        python3 "$(dirname "$0")/render.py"
-    fi
-  else
-    # Nothing was uploaded, so there is no URL to point at. Post the report as
-    # written: its links will not render, but the verdict is still readable,
-    # which is what the gate needs. The captures are in the artifact.
-    cp "$report_path" "$rendered"
-    log "no URLs available; posting the report with its local links intact"
-  fi
-elif [ -s "$mapping" ]; then
-  # No narrative. Either the caller knows why (it skipped the agent on purpose),
-  # or nobody does -- and those two must not read the same, because one is a
-  # healthy run and the other is a run that proved nothing.
-  {
-    echo "### Evidence from the verification run"
-    echo
-    if [ -n "${SKIP_NOTE:-}" ]; then
-      printf '> %s\n' "$SKIP_NOTE"
-    else
-      echo "> No report was written, so this is a file listing, not a described"
-      echo "> result. Treat it as uncontextualised."
-    fi
-    echo
-    while IFS=$'\t' read -r rel url; do
-      [ -n "$rel" ] || continue
-      case "$rel" in motion/*) continue ;; esac
-      echo "**\`${rel}\`**"
-      echo
-      render_file "$rel" "$url"
-      echo
-    done < "$mapping"
-  } > "$rendered"
-fi
-
-if [ "$recovered_review" = true ] && [ -s "$rendered" ]; then
-  { echo "> Recovered from the agent's review on \`${HEAD_SHA:0:12}\`; the run wrote no separate report."; echo; cat "$rendered"; } > "${rendered}.review"
-  mv "${rendered}.review" "$rendered"
-fi
-
-# --- show what the report did not --------------------------------------------
-#
-# The agent posts its findings as prose, and prose about a before/after change
-# usually ends up without a single image even when the captures exist. An
-# evidence comment with no images is a claim, not a look. Anything the run
-# captured and the report did not cite is appended, collapsed, and labelled as
-# uncited -- so the reviewer sees it without it being passed off as the report.
-
-if [ -s "$mapping" ] && [ -s "$rendered" ]; then
-  uncited=()
-  while IFS=$'\t' read -r rel url; do
-    [ -n "$rel" ] || continue
-    [ "$rel" = "${REPORT:-}" ] && continue
-    case "$rel" in motion/*) continue ;; esac
-    # Cited means cited, however the report points at it. A markdown link and an
-    # embed are both a reference; keying on the published URL also catches the
-    # file renamed into a table cell or onto a line of its own.
-    grep -qF -- "$url" "$rendered" && continue
-    if is_image "$rel" || is_video "$rel"; then uncited+=("$rel" "$url"); fi
-  done < "$mapping"
-
-  if [ ${#uncited[@]} -gt 0 ]; then
-    {
-      echo
-      echo "<details><summary>Captures from this run, not cited by the report</summary>"
-      echo
-      echo "> The report does not embed these, so they are not an argument about"
-      echo "> the change. They are what the run looked at."
-      echo
-      echo "| capture | |"
-      echo "|---|---|"
-      i=0
-      while [ "$i" -lt ${#uncited[@]} ]; do
-        rel="${uncited[$i]}"
-        url="${uncited[$((i + 1))]}"
-        printf '| `%s` | %s |\n' "$rel" "$(render_file "$rel" "$url")"
-        i=$((i + 2))
-      done
-      echo
-      echo "</details>"
-    } >> "$rendered"
-    log "appended $(( ${#uncited[@]} / 2 )) uncited capture(s) as a collapsed gallery"
-  fi
+if [ -s "$mapping" ]; then
+  # render.py repoints every link and turns each recording into its animation.
+  # A reference it cannot resolve fails the step: a broken image where evidence
+  # should be reads as a failed capture, which is worse than an error here.
+  REPORT_PATH="$report_path" MAPPING="$mapping" EVIDENCE_ROOT="$root" RENDERED="$rendered" \
+    python3 "$(dirname "$0")/render.py"
+else
+  # Nothing was uploaded, so there is no URL to point at. Post the report as
+  # written: its links will not render, but the verdict is still readable,
+  # which is what the gate needs. The captures are in the artifact.
+  cp "$report_path" "$rendered"
+  log "no URLs available; posting the report with its local links intact"
 fi
 
 # --- deliver -----------------------------------------------------------------

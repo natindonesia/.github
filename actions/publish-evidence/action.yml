@@ -77,24 +77,6 @@ inputs:
       a run that forgot costs more than a screenshot and is still worth keeping.
     required: false
     default: "104857600"
-  head-sha:
-    description: |
-      Commit under test. When no report file exists, the newest pull-request
-      review bound to this commit is used as the report: the QA plugin posts its
-      findings as a review rather than as a file, and a described result must
-      not be downgraded to a file listing because of that. Leave empty to keep
-      the listing.
-    required: false
-    default: ""
-  skip-note:
-    description: |
-      Why there is no report when there is no report on purpose -- the agent was
-      skipped because the change cannot alter the product. Without it the
-      captures are posted under a warning that they are uncontextualised, which
-      is the truthful wording for a run that failed to produce a report and
-      the wrong wording for a run that was never meant to make one.
-    required: false
-    default: ""
   dry-run:
     description: List what would be uploaded and write the rendered report, without touching storage or the pull request.
     required: false
@@ -128,7 +110,5 @@ runs:
         COMMENT_MARKER: ${{ inputs.comment-marker }}
         MAX_BYTES: ${{ inputs.max-bytes }}
         MAX_VIDEO_BYTES: ${{ inputs.max-video-bytes }}
-        HEAD_SHA: ${{ inputs.head-sha }}
-        SKIP_NOTE: ${{ inputs.skip-note }}
         DRY_RUN: ${{ inputs.dry-run }}
       run: bash "${{ github.action_path }}/publish.sh"

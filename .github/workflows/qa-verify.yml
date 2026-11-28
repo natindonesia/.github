@@ -300,7 +300,6 @@ jobs:
           # fixed by the template the agent was given, so guessing would only
           # hide a run that wrote its report somewhere else.
           report: qa-report.md
-          head-sha: ${{ github.event.pull_request.head.sha }}
           dry-run: ${{ inputs.dry-run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

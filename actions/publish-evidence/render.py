@@ -76,21 +76,16 @@ def resolve_key(target: str, urls: dict[str, str]) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def video_refs(doc: str, urls: dict[str, str]) -> list[str]:
-    """The recordings this report refers to, as mapping keys, in order.
-
-    A recording is the one thing that has to be encoded before the upload, and
-    only the report knows which recordings matter: everything else in the
-    directory is uploaded as it is.
-    """
+def refs(doc: str, urls: dict[str, str]) -> list[str]:
+    """Every file this report refers to, as mapping keys, in the order it names them."""
     found: list[str] = []
     for match in MARKDOWN.finditer(doc):
         rel = resolve_key(match.group(2), urls)
-        if rel is not None and VIDEO.search(rel) and rel not in found:
+        if rel is not None and rel not in found:
             found.append(rel)
     for match in HTML_ATTR.finditer(doc):
         rel = resolve_key(match.group(3), urls)
-        if rel is not None and VIDEO.search(rel) and rel not in found:
+        if rel is not None and rel not in found:
             found.append(rel)
     return found
 
@@ -100,10 +95,10 @@ def main() -> int:
     by_url = {url: rel for rel, url in urls.items()}
     doc = REPORT.read_text(encoding="utf-8", errors="replace")
 
-    # "Which recordings do I have to encode first?" asked before the upload, when
-    # the mapping still holds relative paths rather than URLs.
-    if "--video-refs" in sys.argv[1:]:
-        for rel in video_refs(doc, urls):
+    # "Which files do I have to publish?" asked before the upload, when the
+    # mapping still holds relative paths rather than URLs.
+    if "--refs" in sys.argv[1:]:
+        for rel in refs(doc, urls):
             print(rel)
         return 0
 
@@ -161,7 +156,11 @@ def main() -> int:
     # is expected to cite: reporting it as "uploaded but not shown" would be noise
     # on every run that captured a video. Keyed on the key, not the URL, so a
     # prefix that happens to contain the word motion changes nothing.
-    unreferenced = sorted(u for rel, u in urls.items() if u not in referenced and "/motion/" not in rel)
+    unreferenced = sorted(
+        u
+        for rel, u in urls.items()
+        if u not in referenced and not rel.startswith("motion/")
+    )
     if unreferenced:
         print("Uploaded but not shown in the report: " + ", ".join(unreferenced))
 

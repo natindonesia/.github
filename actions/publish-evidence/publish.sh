@@ -29,16 +29,16 @@ MAX_VIDEO_BYTES="${MAX_VIDEO_BYTES:-104857600}"
 
 # The inline copy of a recording. GitHub deletes every tag that can play a video
 # and its image proxy refuses every video type, so the only way a recording moves
-# in a comment is an animated image. AVIF at crf 32 is a moving picture a
-# reviewer can read text in for a fraction of the bytes a gif costs; the first
-# seconds are where a flow shows what changed.
+# in a comment is an animated image. AVIF is a moving picture a reviewer can read
+# text in for a fraction of the bytes a gif costs; the first seconds are where a
+# flow shows what changed.
 #
-# The width is a ceiling, not a target: a 1280-wide recording is kept at 1280,
-# because halving it is what makes text soft, and at crf 32 the difference
-# between 640 and native is 121 KiB against 362 KiB -- both far below the cap.
+# The animation is the recording's own width -- no resampling, so nothing is
+# blurred before the encoder sees it -- and the byte cap below is what stops it,
+# not a width. Set MOTION_WIDTH to a number to impose a ceiling.
 MOTION_SECONDS="${MOTION_SECONDS:-8}"
 MOTION_FPS="${MOTION_FPS:-10}"
-MOTION_WIDTH="${MOTION_WIDTH:-1280}"
+MOTION_WIDTH="${MOTION_WIDTH:-0}"
 MOTION_CRF="${MOTION_CRF:-32}"
 MOTION_PRESET="${MOTION_PRESET:-10}"
 # Past this the animation is not worth its bytes, and the recording stays a link.
@@ -230,18 +230,50 @@ is_video() {
 # never has to know this happens and the recording it wrote keeps its name.
 
 if [ "$root_missing" = false ] && command -v ffmpeg >/dev/null 2>&1; then
-  while IFS= read -r -d '' video; do
+  # One encode attempt. The filter decides the size; the caller decides whether
+  # the result was small enough.
+  encode_motion() {
+    local filter="$1" crf="$2" out="$3"
+    ffmpeg -loglevel error -y -t "$MOTION_SECONDS" -i "$video" \
+      -vf "$filter" \
+      -c:v libsvtav1 -crf "$crf" -preset "$MOTION_PRESET" -f avif "$out" \
+      </dev/null >/dev/null 2>&1
+  }
+
+  # The list is materialised first: a child that reads stdin would otherwise eat
+  # bytes from the find stream, and the *next* path arrives truncated -- which
+  # the poster version of this loop did silently.
+  mapfile -d '' -t videos < <(
+    find "$root" -type f \( -name '*.mp4' -o -name '*.webm' -o -name '*.mov' \) -print0
+  )
+  for video in "${videos[@]}"; do
     rel="${video#"$root"/}"
     motion="$root/motion/${rel%.*}.avif"
     if [ ! -f "$motion" ]; then
       mkdir -p "$(dirname "$motion")"
-      if ! ffmpeg -loglevel error -y -t "$MOTION_SECONDS" -i "$video" \
-          -vf "fps=${MOTION_FPS},scale='min(${MOTION_WIDTH},iw)':-2:flags=lanczos" \
-          -c:v libsvtav1 -crf "$MOTION_CRF" -preset "$MOTION_PRESET" -f avif "$motion" \
-          >/dev/null 2>&1; then
+      # The recording's own width, optionally capped. libsvtav1 takes yuv420, so
+      # an odd dimension is rounded down to even rather than resampled.
+      if [ "${MOTION_WIDTH:-0}" -gt 0 ] 2>/dev/null; then
+        at_source="scale='min(${MOTION_WIDTH},iw)':-2:flags=lanczos"
+      else
+        at_source="scale='trunc(iw/2)*2':'trunc(ih/2)*2'"
+      fi
+      if ! encode_motion "fps=${MOTION_FPS},${at_source}" "$MOTION_CRF" "$motion"; then
         rm -f "$motion"
         warning "could not encode an animated copy of ${rel}; the recording stays a link"
         continue
+      fi
+      # Source width is the default because resampling is what softens text, but
+      # motion in the comment beats a sharp link nobody opens: over the cap, one
+      # retry at half the width.
+      if [ "$(stat -c %s "$motion" 2>/dev/null || echo 0)" -ge "$MAX_MOTION_BYTES" ]; then
+        rm -f "$motion"
+        log "the source-width copy of ${rel} is over the cap; retrying smaller"
+        if ! encode_motion "fps=${MOTION_FPS},scale='trunc(iw/4)*2':'trunc(ih/4)*2'" "$MOTION_CRF" "$motion"; then
+          rm -f "$motion"
+          warning "could not encode an animated copy of ${rel}; the recording stays a link"
+          continue
+        fi
       fi
     fi
     size="$(stat -c %s "$motion" 2>/dev/null || echo 0)"
@@ -255,12 +287,12 @@ if [ "$root_missing" = false ] && command -v ffmpeg >/dev/null 2>&1; then
     fi
     if [ "$size" -ge "$MAX_MOTION_BYTES" ]; then
       rm -f "$motion"
-      warning "the animated copy of ${rel} is $((size / 1024))KiB, over the ${MAX_MOTION_BYTES} byte cap; the recording stays a link"
+      warning "the animated copy of ${rel} is $((size / 1024))KiB even after shrinking, over the ${MAX_MOTION_BYTES} byte cap; the recording stays a link"
       continue
     fi
     files+=("$motion")
     log "motion for ${rel}"
-  done < <(find "$root" -type f \( -name '*.mp4' -o -name '*.webm' -o -name '*.mov' \) -print0)
+  done
 fi
 
 # The prefix names the repository as well as the pull request: one bucket holds

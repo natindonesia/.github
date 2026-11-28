@@ -77,11 +77,11 @@ and uploaded as `motion/<name>.avif`; the recording follows it as a link:
 | Setting | Default | Effect |
 |---|---|---|
 | `MOTION_SECONDS` | `8` | How much of the recording moves. |
-| `MOTION_WIDTH` | `1280` | A ceiling, never an upscale: a 1280-wide recording stays 1280, because halving it is what makes text soft. |
+| `MOTION_WIDTH` | source | `0` keeps the recording's own width; a number is a ceiling (never an upscale). Resampling is what softens text. |
 | `MOTION_FPS` | `10` | Motion, not smoothness, for a fraction of the bytes. |
 | `MOTION_CRF` | `32` | SVT-AV1 quality; text stays legible. |
 | `MOTION_PRESET` | `10` | Fastest encode; a few seconds of clip takes under one. |
-| `MAX_MOTION_BYTES` | `2097152` | Past this the recording stays a link. |
+| `MAX_MOTION_BYTES` | `2097152` | Past this it retries at half the width; still past it, the recording stays a link. |
 
 ```markdown
 ![after-flow.mp4](.../motion/after-flow.avif) [after-flow.mp4](.../after-flow.mp4)

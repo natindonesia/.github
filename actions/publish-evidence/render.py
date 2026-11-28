@@ -32,6 +32,7 @@ MARKDOWN = re.compile(r"(!?\[[^\]]*\]\()([^)\s]+)((?:\s+\"[^\"]*\")?\))")
 # A recording and a PDF are linked, not embedded, so both attributes matter.
 HTML_ATTR = re.compile(r"""(\b(?:src|href)\s*=\s*)(["'])([^"']+)(\2)""", re.IGNORECASE)
 ABSOLUTE = re.compile(r"^[a-z][a-z0-9+.-]*:", re.IGNORECASE)
+VIDEO = re.compile(r"\.(?:mp4|webm|mov)$", re.IGNORECASE)
 
 
 def load_mapping() -> dict[str, str]:
@@ -71,6 +72,7 @@ def resolve(target: str, urls: dict[str, str]) -> str | None:
 
 def main() -> int:
     urls = load_mapping()
+    by_url = {url: rel for rel, url in urls.items()}
     doc = REPORT.read_text(encoding="utf-8", errors="replace")
     missing: list[str] = []
     referenced: set[str] = set()
@@ -85,10 +87,26 @@ def main() -> int:
         referenced.add(url)
         return url
 
+    def motion_for(url: str) -> str | None:
+        """The animated copy published beside this recording, if there is one."""
+        rel = by_url.get(url)
+        if rel is None:
+            return None
+        return urls.get(f"motion/{rel.rsplit('.', 1)[0]}.avif")
+
     def on_markdown(match: re.Match[str]) -> str:
         head, target, tail = match.group(1), match.group(2), match.group(3)
         url = substitute(target)
-        return match.group(0) if url is None else f"{head}{url}{tail}"
+        if url is None:
+            return match.group(0)
+        # A video cannot play in a comment, so the link takes the recording's
+        # animated copy as its picture and keeps the recording as what it opens:
+        # one element, in the place the report put it.
+        motion = motion_for(url) if VIDEO.search(target.split("?")[0].split("#")[0]) else None
+        if motion is not None:
+            label = head[:-1].lstrip("!")[1:-1]
+            return f"[![{label}]({motion})]({url})"
+        return f"{head}{url}{tail}"
 
     def on_html(match: re.Match[str]) -> str:
         head, quote, target, close = match.groups()
@@ -108,8 +126,9 @@ def main() -> int:
 
     # The inline copy of a recording is how it is shown, not an artefact a report
     # is expected to cite: reporting it as "uploaded but not shown" would be noise
-    # on every run that captured a video.
-    unreferenced = sorted(u for u in set(urls.values()) - referenced if "/motion/" not in u)
+    # on every run that captured a video. Keyed on the key, not the URL, so a
+    # prefix that happens to contain the word motion changes nothing.
+    unreferenced = sorted(u for rel, u in urls.items() if u not in referenced and "/motion/" not in rel)
     if unreferenced:
         print("Uploaded but not shown in the report: " + ", ".join(unreferenced))
 

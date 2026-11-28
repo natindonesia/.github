@@ -404,46 +404,6 @@ if [ "$recovered_review" = true ] && [ -s "$rendered" ]; then
   mv "${rendered}.review" "$rendered"
 fi
 
-# --- recordings, inline ------------------------------------------------------
-#
-# A written report cites a recording as a link: that is what the agent can write
-# and what render.py can repoint. GitHub will not play it, so a recording the
-# report cites is shown again here as its animation, with the file linked under
-# it. Recordings the report never cited are the gallery's business below.
-
-if [ -s "$mapping" ] && [ -s "$rendered" ]; then
-  recordings=()
-  while IFS=$'\t' read -r rel url; do
-    [ -n "$rel" ] || continue
-    is_video "$rel" || continue
-    motion="$(motion_url_for "$rel")" || continue
-    grep -qF -- "$url" "$rendered" || continue
-    recordings+=("$rel" "$url" "$motion")
-  done < "$mapping"
-
-  if [ ${#recordings[@]} -gt 0 ]; then
-    {
-      echo
-      echo "<details><summary>Recordings, inline</summary>"
-      echo
-      echo "> A comment cannot play a video, so each recording is shown as an"
-      echo "> animated AVIF. The recording itself is linked under it."
-      echo
-      i=0
-      while [ "$i" -lt ${#recordings[@]} ]; do
-        rel="${recordings[$i]}"
-        url="${recordings[$((i + 1))]}"
-        motion="${recordings[$((i + 2))]}"
-        printf '`%s`\n\n![%s](%s)\n\n[recording (%s)](%s)\n\n' \
-          "$rel" "$rel" "$motion" "$rel" "$url"
-        i=$((i + 3))
-      done
-      echo "</details>"
-    } >> "$rendered"
-    log "appended $(( ${#recordings[@]} / 3 )) recording(s) as inline motion"
-  fi
-fi
-
 # --- show what the report did not --------------------------------------------
 #
 # The agent posts its findings as prose, and prose about a before/after change

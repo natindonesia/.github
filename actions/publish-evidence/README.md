@@ -84,7 +84,7 @@ and uploaded as `motion/<name>.avif`; the recording follows it as a link:
 | `MAX_MOTION_BYTES` | `2097152` | Past this it retries at half the width; still past it, the recording stays a link. |
 
 ```markdown
-![after-flow.mp4](.../motion/after-flow.avif) [after-flow.mp4](.../after-flow.mp4)
+[![after-flow.mp4](.../motion/after-flow.avif)](.../after-flow.mp4)
 ```
 
 An encode that fails, or one that lands over the cap, is skipped silently: the

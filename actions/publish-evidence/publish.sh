@@ -32,9 +32,13 @@ MAX_VIDEO_BYTES="${MAX_VIDEO_BYTES:-104857600}"
 # in a comment is an animated image. AVIF at crf 32 is a moving picture a
 # reviewer can read text in for a fraction of the bytes a gif costs; the first
 # seconds are where a flow shows what changed.
+#
+# The width is a ceiling, not a target: a 1280-wide recording is kept at 1280,
+# because halving it is what makes text soft, and at crf 32 the difference
+# between 640 and native is 121 KiB against 362 KiB -- both far below the cap.
 MOTION_SECONDS="${MOTION_SECONDS:-8}"
 MOTION_FPS="${MOTION_FPS:-10}"
-MOTION_WIDTH="${MOTION_WIDTH:-640}"
+MOTION_WIDTH="${MOTION_WIDTH:-1280}"
 MOTION_CRF="${MOTION_CRF:-32}"
 MOTION_PRESET="${MOTION_PRESET:-10}"
 # Past this the animation is not worth its bytes, and the recording stays a link.

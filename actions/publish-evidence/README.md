@@ -77,7 +77,7 @@ and uploaded as `motion/<name>.avif`; the recording follows it as a link:
 | Setting | Default | Effect |
 |---|---|---|
 | `MOTION_SECONDS` | `8` | How much of the recording moves. |
-| `MOTION_WIDTH` | `640` | Scaled down, never up; height follows. |
+| `MOTION_WIDTH` | `1280` | A ceiling, never an upscale: a 1280-wide recording stays 1280, because halving it is what makes text soft. |
 | `MOTION_FPS` | `10` | Motion, not smoothness, for a fraction of the bytes. |
 | `MOTION_CRF` | `32` | SVT-AV1 quality; text stays legible. |
 | `MOTION_PRESET` | `10` | Fastest encode; a few seconds of clip takes under one. |

@@ -24,13 +24,17 @@ jobs:
       - name: Ensure ffmpeg
         run: |
           set -euo pipefail
-          # The gate extracts a still from every recording, so the self-test has
-          # to be able to make one. Present on some images, not on this one.
+          # Every recording is re-encoded as an animated AVIF, because a comment
+          # cannot play a video. Present on this image, not on every one, and
+          # useless unless the build carries SVT-AV1.
           command -v ffmpeg >/dev/null 2>&1 || {
             sudo apt-get update -qq
             sudo apt-get install -y -qq ffmpeg
           }
           ffmpeg -version | head -1
+          ffmpeg -hide_banner -encoders 2>/dev/null | grep -q libsvtav1 || {
+            echo "::error::this ffmpeg has no libsvtav1, so no recording can be shown inline"; exit 1
+          }
 
       - name: Build a fixture that looks like an agent's output
         run: |
@@ -247,17 +251,24 @@ jobs:
             exit 1
           fi
 
-      - name: Assert a recording gets a poster and is shown as a still
+      - name: Assert a recording is shown as motion, with the recording linked
         run: |
           set -euo pipefail
           rendered="$(sed -n 's/^rendered-report=//p' /tmp/gallery.out)"
-          # A bare mp4 link is not something a reviewer can look at, and GitHub
-          # will not play one inline. The still is what makes the recording
-          # visible; the link is what makes it playable.
-          grep -q 'posters/after-flow.jpg' "$rendered" \
-            || { echo "::error::the recording was published without a poster"; exit 1; }
-          grep -qE '\[\!\[after-flow\.mp4\]\([^)]*posters/after-flow\.jpg\)\]\([^)]*after-flow\.mp4\)' "$rendered" \
-            || { echo "::error::the recording is not rendered as a linking still"; exit 1; }
+          # A bare mp4 link is not something a reviewer can look at: GitHub will
+          # not play one inline, and its image proxy refuses the file. The
+          # animated AVIF is what makes the recording visible; the link under it
+          # is what makes it playable.
+          grep -q 'motion/after-flow.avif' "$rendered" \
+            || { echo "::error::the recording was published without an inline copy"; exit 1; }
+          grep -qE '!\[after-flow\.mp4\]\([^)]*motion/after-flow\.avif\)' "$rendered" \
+            || { echo "::error::the recording is not embedded as an animation"; exit 1; }
+          grep -qE '\[after-flow\.mp4\]\([^)]*after-flow\.mp4\)' "$rendered" \
+            || { echo "::error::the recording itself is not linked beside the animation"; exit 1; }
+          # moov is the track box: without it the file is a still, and the gate
+          # would be publishing a frozen frame it believes is motion.
+          grep -aq moov fixtures/plain/output/motion/after-flow.avif \
+            || { echo "::error::the inline copy is not animated"; exit 1; }
 
   workflow:
     name: actionlint

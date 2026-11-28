@@ -106,10 +106,10 @@ def main() -> int:
         )
         return 1
 
-    # Posters are how a recording is shown, not artefacts a report is expected to
-    # cite: reporting them as "uploaded but not shown" would be noise on every run
-    # that captured a video.
-    unreferenced = sorted(u for u in set(urls.values()) - referenced if "/posters/" not in u)
+    # The inline copy of a recording is how it is shown, not an artefact a report
+    # is expected to cite: reporting it as "uploaded but not shown" would be noise
+    # on every run that captured a video.
+    unreferenced = sorted(u for u in set(urls.values()) - referenced if "/motion/" not in u)
     if unreferenced:
         print("Uploaded but not shown in the report: " + ", ".join(unreferenced))
 

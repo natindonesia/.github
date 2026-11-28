@@ -27,6 +27,19 @@ MAX_BYTES="${MAX_BYTES:-10485760}"
 # one it forgot to.
 MAX_VIDEO_BYTES="${MAX_VIDEO_BYTES:-104857600}"
 
+# The inline copy of a recording. GitHub deletes every tag that can play a video
+# and its image proxy refuses every video type, so the only way a recording moves
+# in a comment is an animated image. AVIF at crf 32 is a moving picture a
+# reviewer can read text in for a fraction of the bytes a gif costs; the first
+# seconds are where a flow shows what changed.
+MOTION_SECONDS="${MOTION_SECONDS:-8}"
+MOTION_FPS="${MOTION_FPS:-10}"
+MOTION_WIDTH="${MOTION_WIDTH:-640}"
+MOTION_CRF="${MOTION_CRF:-32}"
+MOTION_PRESET="${MOTION_PRESET:-10}"
+# Past this the animation is not worth its bytes, and the recording stays a link.
+MAX_MOTION_BYTES="${MAX_MOTION_BYTES:-2097152}"
+
 REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 PR="${PR_NUMBER:?PR_NUMBER is required}"
 RUN_ID="${GITHUB_RUN_ID:-local}"
@@ -172,6 +185,7 @@ content_type() {
     jpg|jpeg)     echo "image/jpeg" ;;
     gif)          echo "image/gif" ;;
     webp)         echo "image/webp" ;;
+    avif)         echo "image/avif" ;;
     svg)          echo "image/svg+xml" ;;
     mp4)          echo "video/mp4" ;;
     webm)         echo "video/webm" ;;
@@ -191,7 +205,7 @@ content_type() {
 
 is_image() {
   case "${1##*.}" in
-    png|jpg|jpeg|gif|webp|svg) return 0 ;;
+    png|jpg|jpeg|gif|webp|avif|svg) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -203,28 +217,45 @@ is_video() {
   esac
 }
 
-# --- posters for the recordings ----------------------------------------------
+# --- motion for the recordings -----------------------------------------------
 #
-# A link to an mp4 is not something a reviewer can look at, and GitHub's comment
-# renderer will not play one inline. A still from the recording, linking to it,
-# is. Generated next to the video rather than in the report, so the agent never
-# has to know this happens.
+# GitHub will not play a recording in a comment: the renderer deletes <video>,
+# <iframe>, <object> and <embed>, and `![](clip.mp4)` becomes a broken image
+# because the image proxy refuses every video type. An animated AVIF is an
+# image, so it embeds and it moves. Built here, before the upload, so the agent
+# never has to know this happens and the recording it wrote keeps its name.
 
 if [ "$root_missing" = false ] && command -v ffmpeg >/dev/null 2>&1; then
   while IFS= read -r -d '' video; do
     rel="${video#"$root"/}"
-    poster="$root/posters/${rel%.*}.jpg"
-    [ -f "$poster" ] && continue
-    mkdir -p "$(dirname "$poster")"
-    # One second in is where a recording has usually settled; a very short one
-    # has no frame there at all, so fall back to its first.
-    if ffmpeg -loglevel error -y -ss 1 -i "$video" -frames:v 1 -vf "scale=640:-2" "$poster" 2>/dev/null \
-      || ffmpeg -loglevel error -y -i "$video" -frames:v 1 -vf "scale=640:-2" "$poster" 2>/dev/null; then
-      files+=("$poster")
-      log "poster for ${rel}"
-    else
-      rm -f "$poster"
+    motion="$root/motion/${rel%.*}.avif"
+    if [ ! -f "$motion" ]; then
+      mkdir -p "$(dirname "$motion")"
+      if ! ffmpeg -loglevel error -y -t "$MOTION_SECONDS" -i "$video" \
+          -vf "fps=${MOTION_FPS},scale='min(${MOTION_WIDTH},iw)':-2:flags=lanczos" \
+          -c:v libsvtav1 -crf "$MOTION_CRF" -preset "$MOTION_PRESET" -f avif "$motion" \
+          >/dev/null 2>&1; then
+        rm -f "$motion"
+        warning "could not encode an animated copy of ${rel}; the recording stays a link"
+        continue
+      fi
     fi
+    size="$(stat -c %s "$motion" 2>/dev/null || echo 0)"
+    # A box named moov is a track, which is what makes an AVIF a sequence rather
+    # than a still. An ffmpeg whose avif muxer cannot write one would otherwise
+    # publish a frozen frame that looks like working evidence.
+    if ! head -c 8192 "$motion" | grep -aq moov; then
+      rm -f "$motion"
+      warning "this ffmpeg wrote a still, not an animation, for ${rel}; the recording stays a link"
+      continue
+    fi
+    if [ "$size" -ge "$MAX_MOTION_BYTES" ]; then
+      rm -f "$motion"
+      warning "the animated copy of ${rel} is $((size / 1024))KiB, over the ${MAX_MOTION_BYTES} byte cap; the recording stays a link"
+      continue
+    fi
+    files+=("$motion")
+    log "motion for ${rel}"
   done < <(find "$root" -type f \( -name '*.mp4' -o -name '*.webm' -o -name '*.mov' \) -print0)
 fi
 
@@ -259,14 +290,15 @@ done
 # rendered report the previous assertion is about to read.
 rendered="${RUNNER_TEMP:-/tmp}/qa-evidence-rendered-$$.md"
 
-# A recording is evidence, but a bare mp4 link is not something a reviewer can
-# look at. Everything else that is embeddable is embedded; the rest is a link.
+# A recording is evidence, and a bare mp4 link is not something a reviewer can
+# look at. Where the inline copy exists, the animation is shown and the
+# recording is linked under it, so the detail is still one click away.
 render_file() {
-  local rel="$1" url="$2" poster
+  local rel="$1" url="$2" motion
   if is_image "$rel"; then
     printf '![%s](%s)' "$rel" "$url"
-  elif is_video "$rel" && poster="$(poster_url_for "$rel")"; then
-    printf '[![%s](%s)](%s)' "$rel" "$poster" "$url"
+  elif is_video "$rel" && motion="$(motion_url_for "$rel")"; then
+    printf '![%s](%s) [%s](%s)' "$rel" "$motion" "$rel" "$url"
   elif is_video "$rel"; then
     printf '[▶ %s](%s)' "$rel" "$url"
   else
@@ -274,8 +306,8 @@ render_file() {
   fi
 }
 
-poster_url_for() {
-  local rel="$1" key="posters/${1%.*}.jpg" k u
+motion_url_for() {
+  local rel="$1" key="motion/${1%.*}.avif" k u
   while IFS=$'\t' read -r k u; do
     if [ "$k" = "$key" ]; then printf '%s' "$u"; return 0; fi
   done < "$mapping"
@@ -322,7 +354,7 @@ elif [ -s "$mapping" ]; then
     echo
     while IFS=$'\t' read -r rel url; do
       [ -n "$rel" ] || continue
-      case "$rel" in posters/*) continue ;; esac
+      case "$rel" in motion/*) continue ;; esac
       echo "**\`${rel}\`**"
       echo
       render_file "$rel" "$url"
@@ -334,6 +366,46 @@ fi
 if [ "$recovered_review" = true ] && [ -s "$rendered" ]; then
   { echo "> Recovered from the agent's review on \`${HEAD_SHA:0:12}\`; the run wrote no separate report."; echo; cat "$rendered"; } > "${rendered}.review"
   mv "${rendered}.review" "$rendered"
+fi
+
+# --- recordings, inline ------------------------------------------------------
+#
+# A written report cites a recording as a link: that is what the agent can write
+# and what render.py can repoint. GitHub will not play it, so a recording the
+# report cites is shown again here as its animation, with the file linked under
+# it. Recordings the report never cited are the gallery's business below.
+
+if [ -s "$mapping" ] && [ -s "$rendered" ]; then
+  recordings=()
+  while IFS=$'\t' read -r rel url; do
+    [ -n "$rel" ] || continue
+    is_video "$rel" || continue
+    motion="$(motion_url_for "$rel")" || continue
+    grep -qF -- "$url" "$rendered" || continue
+    recordings+=("$rel" "$url" "$motion")
+  done < "$mapping"
+
+  if [ ${#recordings[@]} -gt 0 ]; then
+    {
+      echo
+      echo "<details><summary>Recordings, inline</summary>"
+      echo
+      echo "> A comment cannot play a video, so each recording is shown as an"
+      echo "> animated AVIF. The recording itself is linked under it."
+      echo
+      i=0
+      while [ "$i" -lt ${#recordings[@]} ]; do
+        rel="${recordings[$i]}"
+        url="${recordings[$((i + 1))]}"
+        motion="${recordings[$((i + 2))]}"
+        printf '`%s`\n\n![%s](%s)\n\n[recording (%s)](%s)\n\n' \
+          "$rel" "$rel" "$motion" "$rel" "$url"
+        i=$((i + 3))
+      done
+      echo "</details>"
+    } >> "$rendered"
+    log "appended $(( ${#recordings[@]} / 3 )) recording(s) as inline motion"
+  fi
 fi
 
 # --- show what the report did not --------------------------------------------
@@ -349,7 +421,7 @@ if [ -s "$mapping" ] && [ -s "$rendered" ]; then
   while IFS=$'\t' read -r rel url; do
     [ -n "$rel" ] || continue
     [ "$rel" = "${REPORT:-}" ] && continue
-    case "$rel" in posters/*) continue ;; esac
+    case "$rel" in motion/*) continue ;; esac
     # Cited means cited, however the report points at it. A markdown link and an
     # embed are both a reference; keying on the published URL also catches the
     # file renamed into a table cell or onto a line of its own.

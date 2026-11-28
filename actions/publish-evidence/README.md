@@ -68,16 +68,29 @@ A document: [login spec](./login-spec.pdf).
 Uploads carry a real content type per extension, because a PDF served as
 `application/octet-stream` downloads instead of opening.
 
-Every recording also gets a still, extracted with `ffmpeg` one second in and
-uploaded as `posters/<name>.jpg`. A link to an mp4 is not something a reviewer
-can look at -- GitHub will not play one inline -- so the gallery renders the
-still and links it at the recording:
+GitHub will not play a recording in a comment: its renderer deletes `<video>`,
+`<iframe>`, `<object>` and `<embed>`, and its image proxy refuses every video
+type, so `![](clip.mp4)` is a broken image. An animated AVIF is an image, so
+that is what gets shown. It is encoded before the upload, next to the recording,
+and uploaded as `motion/<name>.avif`; the recording follows it as a link:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `MOTION_SECONDS` | `8` | How much of the recording moves. |
+| `MOTION_WIDTH` | `640` | Scaled down, never up; height follows. |
+| `MOTION_FPS` | `10` | Motion, not smoothness, for a fraction of the bytes. |
+| `MOTION_CRF` | `32` | SVT-AV1 quality; text stays legible. |
+| `MOTION_PRESET` | `10` | Fastest encode; a few seconds of clip takes under one. |
+| `MAX_MOTION_BYTES` | `2097152` | Past this the recording stays a link. |
 
 ```markdown
-[![after-flow.mp4](.../posters/after-flow.jpg)](.../after-flow.mp4)
+![after-flow.mp4](.../motion/after-flow.avif) [after-flow.mp4](.../after-flow.mp4)
 ```
 
-A recording too short to have a frame one second in falls back to its first.
+An encode that fails, or one that lands over the cap, is skipped silently: the
+recording is then a plain link, because an embed that resolves to a broken image
+is worse than no embed. All six are environment overrides; the defaults are the
+ones that have been read in a comment.
 
 ## Behaviour worth knowing
 

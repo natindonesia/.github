@@ -75,7 +75,7 @@ answer, who can sign in, and how to start them.
 | Choose the report's shape; embed any file type | | ✔ | |
 | State the verdict | | ✔ | |
 | Put everything the report references in the evidence directory | | ✔ | |
-| Upload every file type, generate a still for each recording, repoint links | | | ✔ |
+| Upload every file type, encode each recording as an animated AVIF, repoint links | | | ✔ |
 | Comment on the pull request; keep an artifact fallback | | | ✔ |
 | Fall back to the agent's review when no report file was written | | | ✔ |
 | `assurance/verified`, not-applicable, fail closed when there is no verdict | | | ✔ |
@@ -290,10 +290,10 @@ A document: [login spec](./login-spec.pdf).
 ```
 
 `publish-evidence` uploads every file in the directory, rewrites markdown links
-and HTML `src`/`href` to public URLs, generates a still from each recording so a
-reviewer can see it without downloading an mp4, and posts the document. A link to
-a file that was never captured fails the step rather than rendering as a broken
-image.
+and HTML `src`/`href` to public URLs, encodes an animated AVIF from each
+recording so a reviewer sees it move without downloading an mp4 -- a comment
+cannot play a video -- and posts the document. A link to a file that was never
+captured fails the step rather than rendering as a broken image.
 
 ## Self-test
 

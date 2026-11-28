@@ -61,6 +61,13 @@ inputs:
     description: Skip the registry and the image identity checks.
     required: false
     default: "false"
+  registry-token:
+    description: |
+      Token for the registry login before pulling the product. The workflow
+      token reads this repository's own packages; a compose file that starts
+      another repository's private package needs a token that can read it.
+    required: false
+    default: ""
 
 outputs:
   product-paths:
@@ -123,7 +130,9 @@ runs:
         QA_OUT: ${{ inputs.evidence-dir }}
         LOG_PATH: ${{ inputs.log }}
         QA_DRY_RUN: ${{ inputs.dry-run }}
-        GH_TOKEN: ${{ github.token }}
+        # `docker login` and `gh` read this. The caller's token wins when it
+        # grants more than this repository's own packages.
+        GH_TOKEN: ${{ inputs.registry-token || github.token }}
       run: |
         set -euo pipefail
 

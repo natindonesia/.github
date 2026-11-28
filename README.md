@@ -144,7 +144,16 @@ agent:
 
 `{base_sha}` and `{head_sha}` are substituted into image names. Passwords reach
 the agent as `QA_PASSWORD_<ROLE>` and are deliberately not written into the
-evidence directory, which is published to a public bucket.
+evidence directory, which is published to a public bucket. An account with no
+`password` is a passwordless one -- an email link, a passkey -- and the agent is
+told to sign in the way the product signs people in.
+
+The images are pulled with the workflow token, which reads this repository's own
+packages. A compose file that starts *another* repository's private package --
+a shared backend, a runtime base -- needs a token that can read it: pass
+`secrets.GHCR_READ_TOKEN` from the caller (`secrets: inherit` is enough) and set
+it to a fine-grained PAT with `read:packages`, or add this repository to that
+package's access list.
 
 **`compose.verify.yaml`** -- how the product starts:
 

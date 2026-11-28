@@ -67,6 +67,15 @@ on:
         required: false
       QA_EVIDENCE_B2_APPLICATION_KEY:
         required: false
+      GHCR_READ_TOKEN:
+        description: |
+          Token used to pull the product's images. Defaults to the workflow
+          token, which is enough when the images belong to this repository.
+          A compose file that starts another repository's private package --
+          a shared backend, a runtime base -- needs a token that can read that
+          package: a fine-grained PAT with `read:packages`, an installation
+          token, or that repository added to the package's access list.
+        required: false
 
 permissions:
   contents: read
@@ -102,6 +111,10 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       # A job env, because `if:` cannot read `secrets` directly.
       QA_AGENT_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      # The registry login for pulling the product. The workflow token reads
+      # this repository's own packages; a compose file that starts another
+      # repository's private package needs a caller-supplied token.
+      QA_REGISTRY_TOKEN: ${{ secrets.GHCR_READ_TOKEN || secrets.GITHUB_TOKEN }}
 
     steps:
       - name: Check out the harness
@@ -225,6 +238,8 @@ jobs:
           project: ${{ env.QA_PROJECT }}
           evidence-dir: ${{ env.QA_OUT }}
           dry-run: ${{ inputs.dry-run }}
+          # Read by the harness before it pulls. Empty means the workflow token.
+          registry-token: ${{ env.QA_REGISTRY_TOKEN }}
 
       - name: Write down what the agent is being given
         if: steps.scope.outputs.applies == 'true'

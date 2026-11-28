@@ -412,7 +412,7 @@ def describe(record: dict[str, str]) -> str:
     return f"{state}/{health}" if health else state
 
 
-def wait_ready(args: argparse.Namespace, timeout: int = 600) -> list[str]:
+def wait_ready(args: argparse.Namespace, timeout: int = 900) -> list[str]:
     """Wait for the product, without letting a missing healthcheck fail the run.
 
     `up --detach --wait` is not used on purpose: compose treats a service that
@@ -437,8 +437,14 @@ def wait_ready(args: argparse.Namespace, timeout: int = 600) -> list[str]:
                 health = (record.get("Health") or "").lower()
                 if state == "running" and health in ("", "healthy"):
                     continue
+                if state == "exited" and str(record.get("ExitCode", "0")) in ("0", "None", ""):
+                    # A one-shot preparation service that finished its job --
+                    # creating a site, running a migration -- is not a service
+                    # that fell over. Anything else that depends on it already
+                    # waited for the exit, so the product being up is the signal.
+                    continue
                 if state in ("exited", "dead"):
-                    problems.append(f"{service} is {state}")
+                    problems.append(f"{service} is {state} (exit {record.get('ExitCode')})")
                 else:
                     ready = False
                     last = f"{service} is {describe(record)}"

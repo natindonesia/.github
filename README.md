@@ -75,8 +75,11 @@ answer, who can sign in, and how to start them.
 | Choose the report's shape; embed any file type | | ✔ | |
 | State the verdict | | ✔ | |
 | Put everything the report references in the evidence directory | | ✔ | |
-| Scan the report for video; encode each recording it refers to as an animated AVIF | | | ✔ |
-| Upload every file type, repoint links | | | ✔ |
+| Put everything the report references in `qa-evidence/` | | ✔ | |
+| Scan `<workspace>/qa-evidence/qa-report.md` for every file it references: markdown links, embeds, HTML `src`/`href` | | | ✔ |
+| Encode each referenced video to an animated AVIF, `qa-evidence/motion/<name>.avif` | | | ✔ |
+| Upload the referenced files and those AVIFs to the bucket, nothing else | | | ✔ |
+| Repoint the links in `qa-report.md` to the bucket's URLs; a video link becomes its AVIF, linked to the mp4 | | | ✔ |
 | Comment on the pull request; keep an artifact fallback | | | ✔ |
 | Fall back to the agent's review when no report file was written | | | ✔ |
 | `assurance/verified`, not-applicable, fail closed when there is no verdict | | | ✔ |
@@ -290,11 +293,12 @@ A recording: [the same clip](./after-flow.mp4).
 A document: [login spec](./login-spec.pdf).
 ```
 
-`publish-evidence` uploads every file in the directory, rewrites markdown links
-and HTML `src`/`href` to public URLs, encodes an animated AVIF from each
-recording so a reviewer sees it move without downloading an mp4 -- a comment
-cannot play a video -- and posts the document. A link to a file that was never
-captured fails the step rather than rendering as a broken image.
+`publish-evidence` reads the report, uploads the files it references and nothing
+else, rewrites those links and HTML `src`/`href` to public URLs, and encodes each
+referenced recording as an animated AVIF so a reviewer sees it move without
+downloading an mp4 -- a comment cannot play a video. A link to a file that was
+never captured fails the step rather than rendering as a broken image; a run with
+no report at all publishes nothing and the verdict says why.
 
 ## Self-test
 

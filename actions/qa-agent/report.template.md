@@ -9,12 +9,12 @@ happened, and links the evidence. A judgement says what it means, and names the
 observations it rests on. If you did not see it, it belongs under "Not verified".
 
 Embed what a reader can look at. A file name on its own is not evidence: an image
-takes a markdown image (leading exclamation mark, alt text in words), a recording
-takes an HTML `video` element with `controls`, and a data file or a document
-takes a plain link. Give a recording its plain link as well -- GitHub plays a
-video only from a host that will serve it, and the link is what a reader still
-has when the player does not load. Paths stay relative; the pipeline repoints
-them at public URLs, and a path that names a file nobody captured fails the run.
+takes a markdown image (leading exclamation mark, alt text in words), a data file
+or a document takes a plain link. A recording stays a plain link -- GitHub strips
+an HTML `video` element out of a comment entirely, so an embedded one renders as
+nothing and takes the evidence with it. Paths stay relative; the pipeline
+repoints them at public URLs, and a path that names a file nobody captured fails
+the run.
 -->
 
 ### What this change set out to do
@@ -27,7 +27,7 @@ One sentence, from the description and the discussion -- not from the diff.
 |---|---|---|---|
 | 1 |  |  | ![sign-in before](./before-home.png) |
 | 2 |  |  | ![sign-in after](./after-home.png) |
-| 3 |  |  | <video src="./after-flow.mp4" controls width="480"></video> [after-flow.mp4](./after-flow.mp4) |
+| 3 |  |  | [recording](./after-flow.mp4) |
 | 4 |  |  | [response](./after-courses.json) |
 
 ### Judgement

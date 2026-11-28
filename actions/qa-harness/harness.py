@@ -205,15 +205,40 @@ def substitute(image: str, base_sha: str, head_sha: str) -> str:
     return image.replace("{base_sha}", base_sha).replace("{head_sha}", head_sha)
 
 
-def check_registry(image: str, repository: str, dry_run: bool) -> None:
-    allowed = f"{REGISTRY_ALLOWLIST}/{repository}"
-    if image.startswith(allowed):
+def allowed_packages(config: dict[str, Any], repository: str) -> set[str]:
+    """The image packages this repository may be judged on.
+
+    Two sources, both on the base branch: the package named after the repository,
+    and whatever `images` the contract itself names. The second is not a
+    loophole -- a product's images are not always named after the repository that
+    builds them (`community-platform-leadership` publishes `community-app`), and
+    the contract is the base branch's own statement of which packages hold its
+    product.
+
+    What this rules out is the thing that matters: a pull request that edits its
+    own caller cannot point the gate at another package's image, because `qa.yml`
+    comes from the base branch and a package it does not name is not allowed.
+    """
+    packages = {f"{REGISTRY_ALLOWLIST}/{repository}"}
+    for image in config["images"].values():
+        name = re.split(r"[@:]", str(image), maxsplit=1)[0]
+        if name.startswith(f"{REGISTRY_ALLOWLIST}/"):
+            packages.add(name)
+    return packages
+
+
+def check_registry(image: str, allowed: set[str], dry_run: bool) -> None:
+    if any(
+        image.startswith(f"{package}:") or image.startswith(f"{package}@")
+        for package in allowed
+    ):
         return
+    names = ", ".join(sorted(allowed))
     if dry_run:
-        log(f"[dry-run] {image} is outside {allowed}; allowed because this is a dry run")
+        log(f"[dry-run] {image} is outside {names}; allowed because this is a dry run")
         return
     fail(
-        f"refusing {image}: a product image must come from {allowed}. "
+        f"refusing {image}: a product image must come from one of {names}. "
         "The gate cannot compare a change to an image it did not build."
     )
 
@@ -223,6 +248,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     base_sha = os.getenv("BASE_SHA", "")
     head_sha = os.getenv("HEAD_SHA", "")
     repository = os.getenv("GITHUB_REPOSITORY", "").split("/")[-1]
+    allowed = allowed_packages(config, repository)
 
     after = args.after_image or config["images"].get("after", "")
     if not after:
@@ -231,12 +257,12 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             "or set `images.after` in qa.yml."
         )
     after = substitute(after, base_sha, head_sha)
-    check_registry(after, repository, args.dry_run)
+    check_registry(after, allowed, args.dry_run)
 
     before = config["images"].get("before", "")
     before = substitute(before, base_sha, head_sha) if before else ""
     if before:
-        check_registry(before, repository, args.dry_run)
+        check_registry(before, allowed, args.dry_run)
 
     mode = "compare" if before and config["urls"].get("before") else "single"
 
@@ -625,7 +651,15 @@ def cmd_environment(args: argparse.Namespace) -> int:
         ]
 
     if accounts:
-        lines += ["Sign in with these roles. Passwords are in the environment, not in this file:", ""]
+        has_password = any(account.get("password") for account in accounts)
+        lines += [
+            (
+                "Sign in with these roles. Passwords are in the environment, not in this file:"
+                if has_password
+                else "Sign in with these roles:"
+            ),
+            "",
+        ]
         for account in accounts:
             label = account.get("email") or account.get("username") or ""
             lines.append(f"- `{account['role']}`: {label}")

@@ -75,7 +75,13 @@ def accounts_block(accounts: list[dict[str, Any]]) -> str:
     for account in accounts:
         role = account.get("role", "user")
         identifier = account.get("email") or account.get("username") or ""
-        lines.append(f"- `{role}`: {identifier} — password in `QA_PASSWORD_{role.upper()}`")
+        if account.get("password"):
+            lines.append(f"- `{role}`: {identifier} -- password in `QA_PASSWORD_{role.upper()}`")
+        else:
+            lines.append(
+                f"- `{role}`: {identifier} -- no password: sign in the way this "
+                "product signs people in (email link, passkey, the flow described above)"
+            )
     return "\n".join(lines)
 
 

@@ -58,7 +58,7 @@ answer, who can sign in, and how to start them.
 | `concurrency`, base and head checkouts | | | ✔ |
 | Refuse a change that edits its own verifier | | | ✔ |
 | Scope gate: diff against `product-paths` | | | ✔ |
-| Resolve the image refs; refuse any ref outside `ghcr.io/natindonesia/<repo>` | | | ✔ |
+| Resolve the image refs; refuse a package the base branch's contract does not name | | | ✔ |
 | Refuse a "change" whose image is identical to its baseline | | | ✔ |
 | Log in, pull both images | | | ✔ |
 | Degrade to single mode when there is no baseline to compare against | | | ✔ |

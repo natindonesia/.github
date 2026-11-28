@@ -221,13 +221,36 @@ is_video() {
   esac
 }
 
-# --- motion for the recordings -----------------------------------------------
+# --- motion for the recordings the report refers to ---------------------------
 #
 # GitHub will not play a recording in a comment: the renderer deletes <video>,
 # <iframe>, <object> and <embed>, and `![](clip.mp4)` becomes a broken image
 # because the image proxy refuses every video type. An animated AVIF is an
-# image, so it embeds and it moves. Built here, before the upload, so the agent
-# never has to know this happens and the recording it wrote keeps its name.
+# image, so it embeds and it moves.
+#
+# Only the recordings the report actually refers to are encoded, and that scan
+# happens before anything is uploaded: the rest of the directory travels as it
+# is. With no report there is only the listing, which shows every capture, so
+# every recording is encoded.
+
+declare -A wanted=()
+encode_all_motion=false
+if [ -n "$report_path" ]; then
+  refmap="$(mktemp)"
+  for file in "${files[@]}"; do
+    printf '%s\t%s\n' "${file#"$root"/}" "${file#"$root"/}" >> "$refmap"
+  done
+  while IFS= read -r ref; do
+    [ -n "$ref" ] && wanted["$ref"]=1
+  done < <(
+    REPORT_PATH="$report_path" MAPPING="$refmap" EVIDENCE_ROOT="$root" \
+      RENDERED=/dev/null python3 "$(dirname "$0")/render.py" --video-refs 2>/dev/null || true
+  )
+  rm -f "$refmap"
+  log "the report refers to ${#wanted[@]} recording(s)"
+else
+  encode_all_motion=true
+fi
 
 if [ "$root_missing" = false ] && command -v ffmpeg >/dev/null 2>&1; then
   # One encode attempt. The filter decides the size; the caller decides whether
@@ -248,6 +271,7 @@ if [ "$root_missing" = false ] && command -v ffmpeg >/dev/null 2>&1; then
   )
   for video in "${videos[@]}"; do
     rel="${video#"$root"/}"
+    if [ "$encode_all_motion" != true ] && [ -z "${wanted[$rel]:-}" ]; then continue; fi
     motion="$root/motion/${rel%.*}.avif"
     if [ ! -f "$motion" ]; then
       mkdir -p "$(dirname "$motion")"

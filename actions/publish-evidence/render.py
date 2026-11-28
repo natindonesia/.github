@@ -47,6 +47,12 @@ def load_mapping() -> dict[str, str]:
 
 def resolve(target: str, urls: dict[str, str]) -> str | None:
     """Map a link as written to an uploaded object, or None."""
+    key = resolve_key(target, urls)
+    return None if key is None else urls[key]
+
+
+def resolve_key(target: str, urls: dict[str, str]) -> str | None:
+    """The mapping key a link as written refers to, or None."""
     if ABSOLUTE.match(target) or target.startswith("#"):
         return None
 
@@ -62,18 +68,45 @@ def resolve(target: str, urls: dict[str, str]) -> str | None:
 
     for key in (candidate, f"output/{candidate}", f"evidence/{candidate}"):
         if key in urls:
-            return urls[key]
+            return key
 
     # Last resort: the file name alone, which is how an agent usually writes a
     # sibling capture. Ambiguity is refused rather than guessed.
-    hits = [u for rel, u in urls.items() if Path(rel).name == Path(candidate).name]
+    hits = [rel for rel in urls if Path(rel).name == Path(candidate).name]
     return hits[0] if len(hits) == 1 else None
+
+
+def video_refs(doc: str, urls: dict[str, str]) -> list[str]:
+    """The recordings this report refers to, as mapping keys, in order.
+
+    A recording is the one thing that has to be encoded before the upload, and
+    only the report knows which recordings matter: everything else in the
+    directory is uploaded as it is.
+    """
+    found: list[str] = []
+    for match in MARKDOWN.finditer(doc):
+        rel = resolve_key(match.group(2), urls)
+        if rel is not None and VIDEO.search(rel) and rel not in found:
+            found.append(rel)
+    for match in HTML_ATTR.finditer(doc):
+        rel = resolve_key(match.group(3), urls)
+        if rel is not None and VIDEO.search(rel) and rel not in found:
+            found.append(rel)
+    return found
 
 
 def main() -> int:
     urls = load_mapping()
     by_url = {url: rel for rel, url in urls.items()}
     doc = REPORT.read_text(encoding="utf-8", errors="replace")
+
+    # "Which recordings do I have to encode first?" asked before the upload, when
+    # the mapping still holds relative paths rather than URLs.
+    if "--video-refs" in sys.argv[1:]:
+        for rel in video_refs(doc, urls):
+            print(rel)
+        return 0
+
     missing: list[str] = []
     referenced: set[str] = set()
 
